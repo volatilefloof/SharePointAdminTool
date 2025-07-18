@@ -1,0 +1,74 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <_LastSelectedProfileId>C:\Users\cnotzon98\source\repos\EntraGroupsApp_User\Properties\PublishProfiles\FolderProfile1.pubxml</_LastSelectedProfileId>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Update="AddToDepartmentsGroupsDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="AuditLogForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="BrowseUsersForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="ConfirmCopyDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="ConfirmUsersDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="CopyToGroupForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="DuplicateUsersDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="ExportDialogForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="Form1.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="GroupSearchForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="GroupSelectionForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="InvalidUsersDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="LoginForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="ManageMembershipsForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="NestedGroupForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="PIMElevateForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="PurgeDialogForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="ReplaceGroupDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="ReplaceTypeSelectionDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="SelectUsersDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="UserSearchForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="WebViewForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+  </ItemGroup>
+</Project>

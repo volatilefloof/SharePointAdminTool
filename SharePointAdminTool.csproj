@@ -1,0 +1,61 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>WinExe</OutputType>
+		<TargetFramework>net8.0-windows</TargetFramework>
+		<Nullable>enable</Nullable>
+		<UseWindowsForms>true</UseWindowsForms>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Authors>Chris Notzon</Authors>
+		<PackageId>SharePointAdminTool</PackageId>
+		<Product />
+		<AssemblyVersion>0.1.1</AssemblyVersion>
+		<AssemblyName>SharePoint Admin Tool</AssemblyName>
+		<ApplicationIcon>address_book_pad_users.ico</ApplicationIcon>
+		<Platforms>AnyCPU;x64</Platforms>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Content Include="address_book_pad_users.ico" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <None Include="C:\Users\cnotzon98\Downloads\createGroupWithGraph.ps1" Link="createGroupWithGraph.ps1" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Azure.Identity" Version="1.14.0" />
+		<PackageReference Include="Microsoft.Graph" Version="5.81.0" />
+		<PackageReference Include="Microsoft.Identity.Client" Version="4.72.1" />
+		<PackageReference Include="Microsoft.Identity.Client.Desktop" Version="4.72.1" />
+		<PackageReference Include="Microsoft.Kiota.Abstractions" Version="1.17.4" />
+		<PackageReference Include="Microsoft.Kiota.Authentication.Azure" Version="1.17.4" />
+		<PackageReference Include="Microsoft.PowerShell.SDK" Version="7.5.2" />
+		<PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3296.44" />
+		<PackageReference Include="System.Security.Claims" Version="4.3.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Compile Update="Properties\Resources.Designer.cs">
+			<DesignTime>True</DesignTime>
+			<AutoGen>True</AutoGen>
+			<DependentUpon>Resources.resx</DependentUpon>
+		</Compile>
+	</ItemGroup>
+
+	<ItemGroup>
+		<EmbeddedResource Update="Properties\Resources.resx">
+			<Generator>ResXFileCodeGenerator</Generator>
+			<LastGenOutput>Resources.Designer.cs</LastGenOutput>
+		</EmbeddedResource>
+	</ItemGroup>
+
+	<Target Name="AfterResolveReferences">
+		<ItemGroup>
+			<EmbeddedResource Include="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.Extension)' == '.dll'">
+				<LogicalName>%(ReferenceCopyLocalPaths.DestinationSubDirectory)%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension)</LogicalName>
+			</EmbeddedResource>
+		</ItemGroup>
+	</Target>
+
+</Project>
