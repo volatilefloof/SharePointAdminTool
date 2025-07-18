@@ -16,6 +16,7 @@ The program automates tasks such as:
 Technologies used:
 C# (.NET Windows Form)
 Microsoft Graph SDK
+Webview 2 Runtime Engine: Sign In Functionality
 
 ## Outcome
 Increased security and consistency for enterprise management of SharePoint across all unit site collections
