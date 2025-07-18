@@ -35,7 +35,7 @@ The app initially acquires only the first two roles, you can sign in and paste t
 The app is strictly configured to manage security groups containing either CSG-CLBA or FSG-CLBA 
 
 For an end-user that wishes to audit their departments SharePoint site, the program attempts to obfuscate other department security groups by means of using Principal Claims.
-The JWT acquires an app role specified by a naming scheme of CLBA-<DEPT> from the app registration itself. The app role itself determines what department they can view.
+The JWT acquires an app role specified by a naming scheme of CLBA-DEPT from the app registration itself. The app role itself determines what department they can view.
 
 Admins, on the other hand, acquire a role of ADMIN and can view all department groups.
 
