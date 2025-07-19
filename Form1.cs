@@ -71,7 +71,7 @@ namespace EntraGroupsApp
                     await _pca.RemoveAsync(account);
                 }
 
-                var scopes = new[] { "User.Read.All", "GroupMember.ReadWrite.All", "Sites.ReadWrite.All" };
+                var scopes = new[] { "User.Read.All", "GroupMember.ReadWrite.All"};
                 var accessTokenProvider = new MsalAccessTokenProvider(_pca, scopes);
                 var authProvider = new BaseBearerTokenAuthenticationProvider(accessTokenProvider);
                 _graphClient = new GraphServiceClient(authProvider);
