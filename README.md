@@ -2,6 +2,7 @@
 
 ## Synopsis
 This is a Windows-based application written in C# to streamline and support management of SharePoint Online specific security groups that are tied to Microsoft Entra ID. 
+
 This tool was created as part of a full-scale digital transformation initiative, in which I led the architecture and execution of a complete migration to Microsoft 365 cloud services for my unit.
 
 ## Purpose:
