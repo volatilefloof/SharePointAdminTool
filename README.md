@@ -13,12 +13,11 @@ The program automates tasks such as:
 3. Auditing of particular groups with the possibility to export as CSV or JSON.
 4. Simplified security group creation using the Powershell Graph SDK
 
-Technologies used:
-C# (.NET Windows Form)
+## Technologies used:
 
-Microsoft Graph SDK
-
-Webview 2 Runtime Engine for Sign-In Functinality
+1. C# (.NET Windows Form)
+2. Microsoft Graph SDK
+3. Webview 2 Runtime Engine for Sign-In Functinality
 
 ## Outcome
 Increased security and consistency for enterprise management of SharePoint across all unit site collections
