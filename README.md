@@ -1,4 +1,4 @@
-# SharePoint Admin Tool
+# TAMU-CLBA SharePoint Admin Tool
 
 ## Synopsis
 This is a Windows-based application written in C# to streamline and support management of SharePoint Online specific security groups that are tied to Microsoft Entra ID. 
