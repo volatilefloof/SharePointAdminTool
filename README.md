@@ -35,8 +35,10 @@ If you have the right to acquire consent through an app registration for the thi
 
 ## API calls used 
 
-https://graph.microsoft.com/v1.0/directoryObjects/{id}
-https://graph.microsoft.com/beta/directory/administrativeUnits/{administrativeUnitId}/members
+1. https://graph.microsoft.com/v1.0/directoryObjects/{id}
+2. https://graph.microsoft.com/beta/directory/administrativeUnits/{administrativeUnitId}/members
+
+## Final Note:
 
 The app is strictly configured to manage security groups that 'startsWith' CSG-CLBA or FSG-CLBA 
 
@@ -45,7 +47,7 @@ The JWT acquires an app role specified by a naming scheme of CLBA_DEPT from the 
 
 Admins, on the other hand, acquire a role of ADMIN and can view all department groups.
 
-Lastly, I did provide auditing but only locally using a serialized JSON.
+I did provide auditing but only locally using a serialized JSON.
 I did not go through the effort of setting up a backend database management server to do this, because in essence auditing is already entrenched into Microsoft 365 itself, and the intended goal is to move this to the Microsoft Power Platform.
 
 Any questions can be redirected to cnotzon98@tamu.edu
