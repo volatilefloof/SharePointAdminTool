@@ -1,4 +1,4 @@
-﻿using Microsoft.Graph;
+using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
@@ -19,6 +19,7 @@ namespace EntraGroupsApp
         public User SelectedUser { get; private set; }
         public List<User> SelectedUsers => _selectedUsers;
         private int _firstNameSortState = 0;
+        private ListBox lstSelectedUsers;
 
         public BrowseUsersForm(GraphServiceClient graphClient, bool singleSelection = false)
         {
@@ -49,7 +50,7 @@ namespace EntraGroupsApp
             dataGridViewUsers = new DataGridView
             {
                 Location = new Point(12, 60),
-                Size = new Size(760, 300),
+                Size = new Size(760, 250),
                 AllowUserToAddRows = false,
                 ReadOnly = false,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
@@ -61,22 +62,56 @@ namespace EntraGroupsApp
             dataGridViewUsers.KeyDown += dataGridViewUsers_KeyDown;
             dataGridViewUsers.ColumnHeaderMouseClick += dataGridViewUsers_ColumnHeaderMouseClick;
 
-            lblSelected = new Label { Location = new Point(12, 370), AutoSize = true, Font = new Font("Segoe UI", 9F) };
-            lblSelected.Text = _singleSelection ? "No user selected" : "No users selected";
+            lblSelected = new Label { Location = new Point(12, 320), AutoSize = true, Font = new Font("Segoe UI", 9F) };
+            lblSelected.Text = _singleSelection ? "No user selected" : "Selected users:";
 
-            btnOK = new Button { Location = new Point(600, 400), Size = new Size(80, 30), Text = "OK" };
+            lstSelectedUsers = new ListBox
+            {
+                Location = new Point(12, 340),
+                Size = new Size(760, 80),
+                Font = new Font("Segoe UI", 9F)
+            };
+            lstSelectedUsers.SelectedIndexChanged += lstSelectedUsers_SelectedIndexChanged;
+
+            btnOK = new Button { Location = new Point(600, 430), Size = new Size(80, 30), Text = "OK" };
             btnOK.Click += btnOK_Click;
 
-            btnCancel = new Button { Location = new Point(690, 400), Size = new Size(80, 30), Text = "Cancel" };
+            btnCancel = new Button { Location = new Point(690, 430), Size = new Size(80, 30), Text = "Cancel" };
             btnCancel.Click += btnCancel_Click;
 
-            Controls.AddRange(new Control[] { lblNote, txtSearch, btnSearch, dataGridViewUsers, lblSelected, btnOK, btnCancel });
-            ClientSize = new Size(780, 450);
+            Controls.AddRange(new Control[] { lblNote, txtSearch, btnSearch, dataGridViewUsers, lblSelected, lstSelectedUsers, btnOK, btnCancel });
+            ClientSize = new Size(780, 480);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
             Text = _singleSelection ? "Browse and Select User" : "Browse and Select Users";
             StartPosition = FormStartPosition.CenterParent;
+        }
+
+        private void UpdateSelectedUsersListBox()
+        {
+            lstSelectedUsers.Items.Clear();
+            foreach (var user in _selectedUsers)
+            {
+                lstSelectedUsers.Items.Add($"{user.DisplayName} ({user.UserPrincipalName})");
+            }
+            lblSelected.Text = _singleSelection ? "No user selected" : $"Selected users: ({_selectedUsers.Count})";
+        }
+
+        private void lstSelectedUsers_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (lstSelectedUsers.SelectedIndex != -1)
+            {
+                var selectedUser = _selectedUsers[lstSelectedUsers.SelectedIndex];
+                var displayItem = _currentDisplayItems.FirstOrDefault(item => item.UserId == selectedUser.Id);
+                if (displayItem != null)
+                {
+                    var rowIndex = _currentDisplayItems.IndexOf(displayItem);
+                    dataGridViewUsers.ClearSelection();
+                    dataGridViewUsers.Rows[rowIndex].Selected = true;
+                    dataGridViewUsers.FirstDisplayedScrollingRowIndex = rowIndex;
+                }
+            }
         }
 
         private void txtSearch_KeyDown(object sender, KeyEventArgs e)
@@ -96,39 +131,53 @@ namespace EntraGroupsApp
                 var displayItem = _currentDisplayItems[rowIndex];
                 bool newValue = !displayItem.Select;
 
+                var user = _allResults.FirstOrDefault(u => u.Id == displayItem.UserId);
+                System.Diagnostics.Debug.WriteLine($"KeyDown: Row {rowIndex}, UserId={displayItem.UserId}, newValue={newValue}, UserFound={user != null}, UserPrincipalName={user?.UserPrincipalName ?? "null"}");
+
+                if (user == null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error: User with ID {displayItem.UserId} not found in _allResults");
+                    return;
+                }
+
                 if (_singleSelection)
                 {
                     foreach (var item in _currentDisplayItems)
                     {
-                        item.Select = false;
+                        if (item != displayItem)
+                            item.Select = false;
                     }
-                }
-                displayItem.Select = newValue;
-
-                var user = _allResults.FirstOrDefault(u => u.Id == displayItem.UserId);
-                if (_singleSelection)
-                {
+                    displayItem.Select = newValue;
                     _selectedUsers.Clear();
-                    if (newValue && user != null)
+                    if (newValue)
                     {
                         _selectedUsers.Add(user);
+                        System.Diagnostics.Debug.WriteLine($"Added user {user.UserPrincipalName ?? user.Id} to _selectedUsers (single selection)");
                     }
-                    lblSelected.Text = user != null && newValue ? $"{user.DisplayName} ({user.UserPrincipalName})" : "No user selected";
+                    UpdateSelectedUsersListBox();
                 }
                 else
                 {
-                    if (newValue && user != null && !_selectedUsers.Any(u => u.Id == user.Id))
+                    displayItem.Select = newValue;
+                    if (newValue && !_selectedUsers.Any(u => u.Id == user.Id))
                     {
                         _selectedUsers.Add(user);
+                        System.Diagnostics.Debug.WriteLine($"Added user {user.UserPrincipalName ?? user.Id} to _selectedUsers");
                     }
                     else if (!newValue)
                     {
                         _selectedUsers.RemoveAll(u => u.Id == user.Id);
+                        System.Diagnostics.Debug.WriteLine($"Removed user {user.UserPrincipalName ?? user.Id} from _selectedUsers");
                     }
-                    lblSelected.Text = _selectedUsers.Any() ? string.Join(", ", _selectedUsers.Select(u => $"{u.DisplayName} ({u.UserPrincipalName})")) : "No users selected";
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Skipped adding user: newValue={newValue}, user={user.UserPrincipalName ?? user.Id}, alreadySelected={_selectedUsers.Any(u => u.Id == user.Id)}");
+                    }
+                    UpdateSelectedUsersListBox();
                 }
 
-                dataGridViewUsers.Refresh();
+                System.Diagnostics.Debug.WriteLine($"KeyDown: Final _selectedUsers.Count={_selectedUsers.Count}, Users={string.Join(", ", _selectedUsers.Select(u => u.UserPrincipalName ?? u.Id))}");
+                dataGridViewUsers.Invalidate();
                 e.Handled = true;
             }
         }
@@ -182,8 +231,6 @@ namespace EntraGroupsApp
                 _currentDisplayItems.Clear();
                 dataGridViewUsers.DataSource = null;
                 _firstNameSortState = 0;
-                _selectedUsers.Clear();
-                lblSelected.Text = _singleSelection ? "No user selected" : "No users selected";
 
                 if (string.IsNullOrWhiteSpace(query))
                 {
@@ -298,6 +345,8 @@ namespace EntraGroupsApp
                     dataGridViewUsers.Rows[0].Selected = true;
                     dataGridViewUsers.Focus();
                 }
+
+                UpdateSelectedUsersListBox();
             }
             catch (Exception ex)
             {
@@ -308,7 +357,10 @@ namespace EntraGroupsApp
         private void dataGridViewUsers_CurrentCellDirtyStateChanged(object sender, EventArgs e)
         {
             if (dataGridViewUsers.IsCurrentCellDirty)
+            {
+                System.Diagnostics.Debug.WriteLine("CurrentCellDirtyStateChanged: Committing edit");
                 dataGridViewUsers.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            }
         }
 
         private void dataGridViewUsers_CellValueChanged(object sender, DataGridViewCellEventArgs e)
@@ -319,32 +371,51 @@ namespace EntraGroupsApp
                 bool newValue = displayItem.Select;
                 var user = _allResults.FirstOrDefault(u => u.Id == displayItem.UserId);
 
+                System.Diagnostics.Debug.WriteLine($"CellValueChanged: Row {e.RowIndex}, UserId={displayItem.UserId}, newValue={newValue}, UserFound={user != null}, UserPrincipalName={user?.UserPrincipalName ?? "null"}");
+
+                if (user == null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error: User with ID {displayItem.UserId} not found in _allResults");
+                    return;
+                }
+
                 if (_singleSelection)
                 {
                     foreach (var item in _currentDisplayItems)
                     {
-                        item.Select = false;
+                        if (item != displayItem)
+                            item.Select = false;
                     }
                     displayItem.Select = newValue;
                     _selectedUsers.Clear();
-                    if (newValue && user != null)
+                    if (newValue)
                     {
                         _selectedUsers.Add(user);
+                        System.Diagnostics.Debug.WriteLine($"Added user {user.UserPrincipalName ?? user.Id} to _selectedUsers (single selection)");
                     }
-                    lblSelected.Text = user != null && newValue ? $"{user.DisplayName} ({user.UserPrincipalName})" : "No user selected";
+                    UpdateSelectedUsersListBox();
                 }
                 else
                 {
-                    if (newValue && user != null && !_selectedUsers.Any(u => u.Id == user.Id))
+                    if (newValue && !_selectedUsers.Any(u => u.Id == user.Id))
                     {
                         _selectedUsers.Add(user);
+                        System.Diagnostics.Debug.WriteLine($"Added user {user.UserPrincipalName ?? user.Id} to _selectedUsers");
                     }
                     else if (!newValue)
                     {
                         _selectedUsers.RemoveAll(u => u.Id == user.Id);
+                        System.Diagnostics.Debug.WriteLine($"Removed user {user.UserPrincipalName ?? user.Id} from _selectedUsers");
                     }
-                    lblSelected.Text = _selectedUsers.Any() ? string.Join(", ", _selectedUsers.Select(u => $"{u.DisplayName} ({u.UserPrincipalName})")) : "No users selected";
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Skipped adding user: newValue={newValue}, user={user.UserPrincipalName ?? user.Id}, alreadySelected={_selectedUsers.Any(u => u.Id == user.Id)}");
+                    }
+                    UpdateSelectedUsersListBox();
                 }
+
+                System.Diagnostics.Debug.WriteLine($"CellValueChanged: Final _selectedUsers.Count={_selectedUsers.Count}, Users={string.Join(", ", _selectedUsers.Select(u => u.UserPrincipalName ?? u.Id))}");
+                dataGridViewUsers.Invalidate();
             }
         }
 
@@ -354,6 +425,7 @@ namespace EntraGroupsApp
             {
                 SelectedUser = _selectedUsers.FirstOrDefault();
             }
+            System.Diagnostics.Debug.WriteLine($"BrowseUsersForm: Closing with {_selectedUsers.Count} users selected: {string.Join(", ", _selectedUsers.Select(u => u.UserPrincipalName ?? u.DisplayName ?? u.Id))}");
             DialogResult = DialogResult.OK;
             Close();
         }
