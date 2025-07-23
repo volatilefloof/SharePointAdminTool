@@ -160,19 +160,25 @@ namespace EntraGroupsApp
                     .Select(r => _currentLogs[r.Index])
                     .ToList();
 
+                if (!selectedLogs.Any())
+                {
+                    MessageBox.Show("No valid log entries selected.", "Selection Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
                 var output = selectedLogs.Select(l =>
                     $"Modification applied to {l.GroupName} for \"{l.TargetName}\" ({l.TargetType}) on {l.Timestamp:yyyy-MM-dd HH:mm:ss}. Details: {l.Details}")
                     .Aggregate((a, b) => a + "\n" + b);
 
                 Clipboard.SetText(output);
-                MessageBox.Show("Selected log entries copied to clipboard.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show($"Successfully copied {selectedLogs.Count} log entr{(selectedLogs.Count == 1 ? "y" : "ies")} to clipboard.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Error copying to clipboard: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
-
+        
         private void BtnClose_Click(object sender, EventArgs e)
         {
             this.Close();
