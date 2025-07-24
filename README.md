@@ -27,7 +27,8 @@ Increased security and consistency for enterprise management of SharePoint acros
 The program uses the following Entra API roles to function:
 1. User.Read.All (delegated through app client id), to read user metadata such as jobTitle, Department, and mail nickname
 2. GroupMember.ReadWrite.All (delegated through app client id), to read/write to existing entra security groups
-3. AdministrativeUnit.ReadWrite.All (delegated through JIT), used to create security groups inside the designated administrative unit
+3. AdministrativeUnit.ReadWrite.All (delegated through JIT), used to create security groups inside the designated administrative uni
+4. Sites.FullControl.All (delegated through app client id)
 
 As the third API role is only permitted to be acquired through JIT elevation in this environment, it was only possible to integrate it into this existing app by using first party consented Powershell Graph SDK alongside Powershell 7.
 The groupsearchform class instantiates a method in which the relevant powershell script is called with pwsh, and then prompts for input accordingly.
