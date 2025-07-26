@@ -121,188 +121,256 @@ namespace EntraGroupsApp
             }
         }
         private async Task LoadCurrentPermissionsAsync(string debugSessionId = null)
+{
+    debugSessionId = debugSessionId ?? Guid.NewGuid().ToString();
+    if (DateTime.UtcNow - lastRefreshTime < minimumRefreshInterval)
+    {
+        await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsSkipped", _libraryName, null, "Subfolder",
+            $"Refresh skipped due to debounce, time since last refresh: {(DateTime.UtcNow - lastRefreshTime).TotalSeconds}s, Session ID: {debugSessionId}");
+        return;
+    }
+
+    string selectedSubfolderName = null;
+    var nodesToAdd = new List<TreeNode>();
+    var auditLogs = new List<(string Action, string GroupName, string Details)>(); // Batch audit logs
+    UpdateUI(() =>
+    {
+        try
         {
-            if (DateTime.UtcNow - lastRefreshTime < minimumRefreshInterval)
-            {
-                await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsSkipped", _libraryName, null, "Subfolder",
-                    $"Refresh skipped due to debounce, time since last refresh: {(DateTime.UtcNow - lastRefreshTime).TotalSeconds}s, Session ID: {debugSessionId ?? Guid.NewGuid().ToString()}");
-                return;
-            }
-            debugSessionId = debugSessionId ?? Guid.NewGuid().ToString();
-            string selectedSubfolderName = null;
+            isUpdatingTreeView = true;
+            selectedSubfolderName = tvSubfolders.SelectedNode?.Tag is TreeNodeData nodeData && nodeData.IsSubfolder ? nodeData.Subfolder.Name : null;
+            tvSubfolders.Nodes.Clear();
+            statusLabel.Text = "Loading subfolder permissions...";
+            progressBar.Value = 0;
+            progressBar.Visible = true;
+            btnRefresh.Enabled = false;
+            btnClose.Text = "Cancel";
+            btnClose.Click -= btnClose_Click;
+            btnClose.Click += (s, e) => _cancellationTokenSource.Cancel();
+        }
+        catch (Exception ex)
+        {
+            selectedSubfolderName = null;
+            statusLabel.Text = "Warning: Subfolder selection invalid during load.";
+            auditLogs.Add(("DebugLoadPermissionsSelectionError", null, $"Failed to get selected subfolder: {ex.Message}, Inner: {(ex.InnerException?.Message ?? "None")}, StackTrace: {ex.StackTrace}, Session ID: {debugSessionId}"));
+        }
+        finally
+        {
+            isUpdatingTreeView = false;
+        }
+    });
+
+    try
+    {
+        var scopes = new[] { "https://tamucs.sharepoint.com/.default" };
+        auditLogs.Add(("DebugLoadPermissionsAuthStart", null, $"Acquiring authentication token for scopes: {string.Join(", ", scopes)}, Session ID: {debugSessionId}"));
+        var accounts = await _pca.GetAccountsAsync();
+        var account = accounts.FirstOrDefault();
+        if (account == null)
+        {
             UpdateUI(() =>
             {
-                try
-                {
-                    isUpdatingTreeView = true;
-                    selectedSubfolderName = tvSubfolders.SelectedNode?.Tag is TreeNodeData nodeData && nodeData.IsSubfolder ? nodeData.Subfolder.Name : null;
-                    _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsStart", _libraryName, null, "Subfolder",
-                        $"Starting LoadCurrentPermissionsAsync, Selected Subfolder: {(selectedSubfolderName != null ? selectedSubfolderName : "None")}, Session ID: {debugSessionId}").GetAwaiter().GetResult();
-                    tvSubfolders.Nodes.Clear();
-                    statusLabel.Text = "Loading current permissions...";
-                }
-                catch (Exception ex)
-                {
-                    selectedSubfolderName = null;
-                    statusLabel.Text = "Warning: Subfolder selection invalid during load.";
-                    _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsSelectionError", _libraryName, null, "Subfolder",
-                        $"Failed to get selected subfolder: {ex.Message}, Inner: {(ex.InnerException != null ? ex.InnerException.Message : "None")}, StackTrace: {ex.StackTrace}, Session ID: {debugSessionId}").GetAwaiter().GetResult();
-                }
-                finally
-                {
-                    isUpdatingTreeView = false;
-                }
+                MessageBox.Show("No signed-in account found. Please sign in again.", "Authentication Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                statusLabel.Text = "Error: No signed-in account.";
+                progressBar.Visible = false;
             });
-            try
-            {
-                var scopes = new[] { "https://tamucs.sharepoint.com/.default" };
-                await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsAuthStart", _libraryName, null, "Subfolder",
-                    $"Acquiring authentication token for scopes: {string.Join(", ", scopes)}, Session ID: {debugSessionId}");
-                var accounts = await _pca.GetAccountsAsync();
-                var account = accounts.FirstOrDefault();
-                if (account == null)
-                {
-                    UpdateUI(() =>
-                    {
-                        MessageBox.Show("No signed-in account found. Please sign in again.", "Authentication Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        statusLabel.Text = "Error: No signed-in account.";
-                    });
-                    await _auditLogManager.LogAction(_signedInUserId, null, "LoadSubfolderPermissionsError", _libraryName, null, "Subfolder",
-                        $"No signed-in account found, Session ID: {debugSessionId}");
-                    return;
-                }
-                var authResult = await _pca.AcquireTokenSilent(scopes, account).ExecuteAsync();
-                await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsAuthSuccess", _libraryName, null, "Subfolder",
-                    $"Authentication token acquired, Session ID: {debugSessionId}");
-                using (var context = new ClientContext(_siteUrl))
-                {
-                    context.ExecutingWebRequest += (s, e) => { e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken; };
-                    await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsContextSetup", _libraryName, null, "Subfolder",
-                        $"ClientContext initialized for site: {_siteUrl}, Session ID: {debugSessionId}");
-                    var web = context.Web;
-                    var library = web.Lists.GetByTitle(_libraryName);
-                    var folder = library.RootFolder;
-                    context.Load(folder, f => f.Folders.Include(f => f.Name, f => f.ServerRelativeUrl,
-                        f => f.ListItemAllFields.HasUniqueRoleAssignments, f => f.ListItemAllFields.RoleAssignments.Include(
-                        ra => ra.Member.Title, ra => ra.Member.LoginName, ra => ra.RoleDefinitionBindings)));
-                    await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsQuerySetup", _libraryName, null, "Subfolder",
-                        $"Query setup for library: {_libraryName}, Session ID: {debugSessionId}");
-                    await context.ExecuteQueryAsync();
-                    await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsQueryExecuted", _libraryName, null, "Subfolder",
-                        $"Query executed, Folder count: {folder.Folders.Count}, Session ID: {debugSessionId}");
-                    var subfolders = folder.Folders.Where(f => !f.Name.StartsWith("Forms")).ToList();
-                    await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsSubfoldersFiltered", _libraryName, null, "Subfolder",
-                        $"Filtered subfolders: {subfolders.Count}, Names: {string.Join(", ", subfolders.Select(f => f.Name))}, Session ID: {debugSessionId}");
-                    foreach (var subfolder in subfolders)
-                    {
-                        await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsProcessSubfolder", _libraryName, null, "Subfolder",
-                            $"Processing subfolder: {subfolder.Name}, ServerRelativeUrl: {subfolder.ServerRelativeUrl}, Session ID: {debugSessionId}");
-                        var perms = new List<string>();
-                        int groupCount = 0;
-                        try
-                        {
-                            if (subfolder.ListItemAllFields != null && subfolder.ListItemAllFields.RoleAssignments != null)
-                            {
-                                foreach (var ra in subfolder.ListItemAllFields.RoleAssignments)
-                                {
-                                    try
-                                    {
-                                        if (ra.Member != null && ra.Member.Title != null && ra.Member.Title.StartsWith("CSG-", StringComparison.OrdinalIgnoreCase))
-                                        {
-                                            var role = ra.RoleDefinitionBindings.FirstOrDefault()?.Name ?? "Unknown";
-                                            if (role == "Contribute") role = "Edit";
-                                            perms.Add($"{ra.Member.Title}: {role}");
-                                            groupCount++;
-                                            await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsRoleAssignment", _libraryName, null, "Subfolder",
-                                                $"Subfolder: {subfolder.Name}, Group: {ra.Member.Title}, Role: {role}, Session ID: {debugSessionId}");
-                                        }
-                                    }
-                                    catch (Exception raEx)
-                                    {
-                                        await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsRoleAssignmentError", _libraryName, null, "Subfolder",
-                                            $"Error processing role assignment for subfolder: {subfolder.Name}, Error: {raEx.Message}, Inner: {(raEx.InnerException != null ? raEx.InnerException.Message : "None")}, StackTrace: {raEx.StackTrace}, Session ID: {debugSessionId}");
-                                    }
-                                }
-                            }
-                        }
-                        catch (Exception permEx)
-                        {
-                            await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsPermissionsError", _libraryName, null, "Subfolder",
-                                $"Error accessing role assignments for subfolder: {subfolder.Name}, Error: {permEx.Message}, Inner: {(permEx.InnerException != null ? permEx.InnerException.Message : "None")}, StackTrace: {permEx.StackTrace}, Session ID: {debugSessionId}");
-                        }
-                        string summary = groupCount > 0 ? $"{groupCount} CSG group(s) assigned" : "No CSG groups";
-                        bool hasUnique = false;
-                        try
-                        {
-                            hasUnique = subfolder.ListItemAllFields != null && subfolder.ListItemAllFields.HasUniqueRoleAssignments;
-                            await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsUniqueCheck", _libraryName, null, "Subfolder",
-                                $"Subfolder: {subfolder.Name}, HasUniqueRoleAssignments: {hasUnique}, Session ID: {debugSessionId}");
-                        }
-                        catch (Exception uniqueEx)
-                        {
-                            await _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsUniqueCheckError", _libraryName, null, "Subfolder",
-                                $"Error checking HasUniqueRoleAssignments for subfolder: {subfolder.Name}, Error: {uniqueEx.Message}, Inner: {(uniqueEx.InnerException != null ? uniqueEx.InnerException.Message : "None")}, StackTrace: {uniqueEx.StackTrace}, Session ID: {debugSessionId}");
-                        }
-                        UpdateUI(() =>
-                        {
-                            try
-                            {
-                                isUpdatingTreeView = true;
-                                var subfolderNode = new TreeNode
-                                {
-                                    Text = $"{subfolder.Name} ({(hasUnique ? "Unique" : "Inherited")}, {summary})",
-                                    ImageIndex = 0,
-                                    SelectedImageIndex = 0,
-                                    Tag = new TreeNodeData { IsSubfolder = true, Subfolder = subfolder }
-                                };
-                                tvSubfolders.Nodes.Add(subfolderNode);
-                                LoadGroupDetailsForSubfolder(subfolder, subfolderNode, debugSessionId);
-                                if (subfolder.Name == selectedSubfolderName)
-                                {
-                                    tvSubfolders.SelectedNode = subfolderNode;
-                                    subfolderNode.Expand();
-                                }
-                            }
-                            catch (Exception uiEx)
-                            {
-                                _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsUIUpdateError", _libraryName, null, "Subfolder",
-                                    $"UI update error for subfolder: {subfolder.Name}, Error: {uiEx.Message}, Inner: {(uiEx.InnerException != null ? uiEx.InnerException.Message : "None")}, StackTrace: {uiEx.StackTrace}, Session ID: {debugSessionId}").GetAwaiter().GetResult();
-                            }
-                            finally
-                            {
-                                isUpdatingTreeView = false;
-                            }
-                        });
-                    }
-                    UpdateUI(() =>
-                    {
-                        isUpdatingTreeView = true;
-                        statusLabel.Text = "Permissions loaded.";
-                        _auditLogManager.LogAction(_signedInUserId, null, "DebugLoadPermissionsUISuccess", _libraryName, null, "Subfolder",
-                            $"Permissions UI updated successfully, Session ID: {debugSessionId}").GetAwaiter().GetResult();
-                        isUpdatingTreeView = false;
-                    });
-                    UpdateSidebar();
-                }
-                lastRefreshTime = DateTime.UtcNow;
-            }
-            catch (Exception ex)
+            auditLogs.Add(("LoadSubfolderPermissionsError", null, $"No signed-in account found, Session ID: {debugSessionId}"));
+            await LogAuditBatchAsync(auditLogs);
+            return;
+        }
+        var authResult = await _pca.AcquireTokenSilent(scopes, account).ExecuteAsync();
+        auditLogs.Add(("DebugLoadPermissionsAuthSuccess", null, $"Authentication token acquired, Session ID: {debugSessionId}"));
+
+        using (var context = new ClientContext(_siteUrl))
+        {
+            context.ExecutingWebRequest += (s, e) => { e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken; };
+            auditLogs.Add(("DebugLoadPermissionsContextSetup", null, $"ClientContext initialized for site: {_siteUrl}, Session ID: {debugSessionId}"));
+
+            var web = context.Web;
+            var library = web.Lists.GetByTitle(_libraryName);
+            var folder = library.RootFolder;
+            context.Load(folder, f => f.Folders.Include(f => f.Name, f => f.ServerRelativeUrl,
+                f => f.ListItemAllFields.HasUniqueRoleAssignments, f => f.ListItemAllFields.RoleAssignments.Include(
+                ra => ra.Member.Title, ra => ra.Member.LoginName, ra => ra.RoleDefinitionBindings)));
+            await context.ExecuteQueryAsync();
+            auditLogs.Add(("DebugLoadPermissionsQueryExecuted", null, $"Query executed, Folder count: {folder.Folders.Count}, Session ID: {debugSessionId}"));
+
+            var subfolders = folder.Folders.Where(f => !f.Name.StartsWith("Forms")).ToList();
+            auditLogs.Add(("DebugLoadPermissionsSubfoldersFiltered", null, $"Filtered subfolders: {subfolders.Count}, Names: {string.Join(", ", subfolders.Select(f => f.Name))}, Session ID: {debugSessionId}"));
+
+            if (!subfolders.Any())
             {
                 UpdateUI(() =>
                 {
                     isUpdatingTreeView = true;
-                    MessageBox.Show($"Failed to load permissions: {ex.Message}\nInner Exception: {(ex.InnerException != null ? ex.InnerException.Message : "None")}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    statusLabel.Text = "Error loading permissions.";
+                    MessageBox.Show("No subfolders found.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    statusLabel.Text = "No subfolders found.";
+                    progressBar.Visible = false;
                     btnChange.Enabled = false;
                     btnAdd.Enabled = false;
                     btnRemove.Enabled = false;
                     UpdateSidebar();
                     isUpdatingTreeView = false;
                 });
-                await _auditLogManager.LogAction(_signedInUserId, null, "LoadSubfolderPermissionsError", _libraryName, null, "Subfolder",
-                    $"Failed to load subfolder permissions: {ex.Message}, Inner: {(ex.InnerException != null ? ex.InnerException.Message : "None")}, StackTrace: {ex.StackTrace}, Session ID: {debugSessionId}");
+                auditLogs.Add(("LoadSubfolderPermissionsNoSubfolders", null, $"No subfolders found in library '{_libraryName}', Session ID: {debugSessionId}"));
+                await LogAuditBatchAsync(auditLogs);
+                return;
             }
+
+            int totalSubfolders = subfolders.Count;
+            int processedSubfolders = 0;
+            int progressUpdateInterval = Math.Max(1, totalSubfolders / 20); // Update progress every 5%
+
+            foreach (var subfolder in subfolders)
+            {
+                if (_cancellationTokenSource.Token.IsCancellationRequested)
+                {
+                    UpdateUI(() =>
+                    {
+                        statusLabel.Text = "Loading cancelled by user.";
+                        progressBar.Visible = false;
+                        btnClose.Text = "Close";
+                        btnClose.Click -= (s, e) => _cancellationTokenSource.Cancel();
+                        btnClose.Click += btnClose_Click;
+                    });
+                    auditLogs.Add(("LoadSubfolderPermissionsCancelled", null, $"Loading permissions cancelled, Session ID: {debugSessionId}"));
+                    await LogAuditBatchAsync(auditLogs);
+                    return;
+                }
+
+                auditLogs.Add(("DebugLoadPermissionsProcessSubfolder", null, $"Processing subfolder: {subfolder.Name}, ServerRelativeUrl: {subfolder.ServerRelativeUrl}, Session ID: {debugSessionId}"));
+
+                var perms = new List<string>();
+                int groupCount = 0;
+                if (subfolder.ListItemAllFields?.RoleAssignments != null)
+                {
+                    foreach (var ra in subfolder.ListItemAllFields.RoleAssignments)
+                    {
+                        try
+                        {
+                            if (ra.Member?.Title?.StartsWith("CSG-", StringComparison.OrdinalIgnoreCase) == true)
+                            {
+                                var role = ra.RoleDefinitionBindings.FirstOrDefault()?.Name ?? "Unknown";
+                                if (role == "Contribute") role = "Edit";
+                                if (role != "Limited Access")
+                                {
+                                    perms.Add($"{ra.Member.Title}: {role}");
+                                    groupCount++;
+                                    auditLogs.Add(("DebugLoadPermissionsRoleAssignment", ra.Member.Title, $"Subfolder: {subfolder.Name}, Group: {ra.Member.Title}, Role: {role}, Session ID: {debugSessionId}"));
+                                }
+                            }
+                        }
+                        catch (Exception raEx)
+                        {
+                            auditLogs.Add(("DebugLoadPermissionsRoleAssignmentError", null, $"Error processing role assignment for subfolder: {subfolder.Name}, Error: {raEx.Message}, Inner: {(raEx.InnerException?.Message ?? "None")}, StackTrace: {raEx.StackTrace}, Session ID: {debugSessionId}"));
+                        }
+                    }
+                }
+
+                auditLogs.Add(("DebugLoadPermissionsUniqueCheck", null, $"Subfolder: {subfolder.Name}, HasUniqueRoleAssignments: {subfolder.ListItemAllFields?.HasUniqueRoleAssignments ?? false}, Session ID: {debugSessionId}"));
+
+                var subfolderNode = new TreeNode
+                {
+                    Text = (subfolder.ListItemAllFields?.HasUniqueRoleAssignments ?? false)
+                        ? $"{subfolder.Name} (Unique, {groupCount} CSG group{(groupCount == 1 ? "" : "s")} assigned)"
+                        : $"{subfolder.Name} (Inherited)",
+                    ImageIndex = 0,
+                    SelectedImageIndex = 0,
+                    Tag = new TreeNodeData { IsSubfolder = true, Subfolder = subfolder }
+                };
+
+                foreach (var ra in subfolder.ListItemAllFields.RoleAssignments)
+                {
+                    if (ra.Member?.Title?.StartsWith("CSG-", StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        var groupName = ra.Member.Title;
+                        var role = ra.RoleDefinitionBindings.FirstOrDefault()?.Name ?? "Unknown";
+                        if (role == "Contribute") role = "Edit";
+                        if (role == "Limited Access") continue;
+
+                        var groupId = ra.Member.LoginName.Split('|').Last();
+                        var groupNode = new TreeNode
+                        {
+                            Text = $"{groupName}: {role}",
+                            ImageIndex = 1,
+                            SelectedImageIndex = 1,
+                            Tag = new TreeNodeData { IsSubfolder = false, GroupId = groupId, GroupName = groupName, Permission = role }
+                        };
+                        subfolderNode.Nodes.Add(groupNode);
+                        auditLogs.Add(("DebugLoadGroupDetails", groupName, $"Added group '{groupName}' with role '{role}' to TreeView for subfolder: {subfolder.Name}, Session ID: {debugSessionId}"));
+                    }
+                }
+
+                nodesToAdd.Add(subfolderNode);
+                processedSubfolders++;
+                if (processedSubfolders % progressUpdateInterval == 0 || processedSubfolders == totalSubfolders)
+                {
+                    UpdateUI(() => progressBar.Value = totalSubfolders > 0 ? (int)((processedSubfolders / (double)totalSubfolders) * 100) : 0);
+                }
+
+                if (subfolder.Name == selectedSubfolderName)
+                {
+                    subfolderNode.Expand();
+                }
+            }
+
+            UpdateUI(() =>
+            {
+                isUpdatingTreeView = true;
+                tvSubfolders.Nodes.AddRange(nodesToAdd.ToArray());
+                statusLabel.Text = "Permissions loaded.";
+                progressBar.Value = 100;
+                progressBar.Visible = false;
+                UpdateSidebar();
+                _originalNodes = CloneTreeNodes(tvSubfolders.Nodes); // Preserve for search
+                if (tvSubfolders.Nodes.Cast<TreeNode>().Any(n => (n.Tag as TreeNodeData)?.Subfolder.Name == selectedSubfolderName))
+                {
+                    tvSubfolders.SelectedNode = tvSubfolders.Nodes.Cast<TreeNode>().First(n => (n.Tag as TreeNodeData)?.Subfolder.Name == selectedSubfolderName);
+                }
+                isUpdatingTreeView = false;
+            });
+            auditLogs.Add(("DebugLoadPermissionsUISuccess", null, $"Permissions UI updated successfully, Session ID: {debugSessionId}"));
+            await LogAuditBatchAsync(auditLogs);
+            lastRefreshTime = DateTime.UtcNow;
         }
+    }
+    catch (Exception ex)
+    {
+        UpdateUI(() =>
+        {
+            isUpdatingTreeView = true;
+            MessageBox.Show($"Failed to load permissions: {ex.Message}\nInner Exception: {(ex.InnerException?.Message ?? "None")}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            statusLabel.Text = "Error loading permissions.";
+            progressBar.Visible = false;
+            btnChange.Enabled = false;
+            btnAdd.Enabled = false;
+            btnRemove.Enabled = false;
+            UpdateSidebar();
+            isUpdatingTreeView = false;
+        });
+        auditLogs.Add(("LoadSubfolderPermissionsError", null, $"Failed to load subfolder permissions: {ex.Message}, Inner: {(ex.InnerException?.Message ?? "None")}, StackTrace: {ex.StackTrace}, Session ID: {debugSessionId}"));
+        await LogAuditBatchAsync(auditLogs);
+    }
+    finally
+    {
+        UpdateUI(() =>
+        {
+            btnRefresh.Enabled = true;
+            btnClose.Text = "Close";
+            btnClose.Click -= (s, e) => _cancellationTokenSource.Cancel();
+            btnClose.Click += btnClose_Click;
+        });
+    }
+}
+
+// Helper method to batch audit logs
+private async Task LogAuditBatchAsync(List<(string Action, string GroupName, string Details)> logs)
+{
+    foreach (var log in logs)
+    {
+        await _auditLogManager.LogAction(_signedInUserId, null, log.Action, _libraryName, log.GroupName, "Subfolder", log.Details);
+    }
+}
         private void UpdateSidebar()
         {
             UpdateUI(() =>
