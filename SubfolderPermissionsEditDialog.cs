@@ -300,114 +300,287 @@ namespace EntraGroupsApp
             }
         }
 
-        private async void btnAdd_Click(object sender, EventArgs e)
+                private async void btnAdd_Click(object sender, EventArgs e)
         {
-            if (lvPermissions.SelectedItems.Count != 1)
-            {
-                MessageBox.Show("Please select exactly one subfolder.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                lblStatus.Text = "Add cancelled: Invalid subfolder selection.";
-                return;
-            }
-
-            if (cmbGroups.SelectedItem == null || cmbPermissions.SelectedItem == null)
-            {
-                MessageBox.Show("Please select a group and permission level.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                lblStatus.Text = "Add cancelled: Missing selection.";
-                return;
-            }
-
-            var selectedItem = lvPermissions.SelectedItems[0];
-            string subfolderName = selectedItem.Text;
-            bool hasUniquePermissions = selectedItem.SubItems[2].Text == "Unique";
-            if (!hasUniquePermissions)
-            {
-                MessageBox.Show("Subfolder has inherited permissions. Break inheritance first.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                lblStatus.Text = "Add cancelled: Subfolder has inherited permissions.";
-                return;
-            }
-
-            GroupItem selectedGroup = (GroupItem)cmbGroups.SelectedItem;
-            string selectedGroupId = selectedGroup.Id;
-            string permissionLevel = cmbPermissions.SelectedItem.ToString();
-
-            if (permissionLevel == "No Direct Access")
-            {
-                MessageBox.Show("Use 'Remove Selected' to remove permissions.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                lblStatus.Text = "Add cancelled: Invalid permission level.";
-                return;
-            }
-
+            string subfolderName = null;
+            GroupItem selectedGroup = null;
+            UpdateUI(() => btnAdd.Enabled = false);
             try
             {
-                lblStatus.Text = $"Adding permission for '{selectedGroup.DisplayName}' to '{subfolderName}'...";
+                if (lvSubfolders.SelectedItems.Count != 1)
+                {
+                    UpdateUI(() =>
+                    {
+                        MessageBox.Show("Please select exactly one subfolder.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        statusLabel.Text = "Add cancelled: Invalid subfolder selection.";
+                    });
+                    return;
+                }
+
+                if (cmbGroups.SelectedItem == null || cmbPermissions.SelectedItem == null)
+                {
+                    UpdateUI(() =>
+                    {
+                        MessageBox.Show("Please select a group and permission level.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        statusLabel.Text = "Add cancelled: Missing selection.";
+                    });
+                    return;
+                }
+
+                var selectedItem = lvSubfolders.SelectedItems[0];
+                subfolderName = selectedItem.Text;
+                bool hasUniquePermissions = selectedItem.SubItems.Count >= 3 && selectedItem.SubItems[2].Text == "Unique";
+                if (!hasUniquePermissions)
+                {
+                    UpdateUI(() =>
+                    {
+                        MessageBox.Show("Subfolder has inherited permissions. Break inheritance first.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        statusLabel.Text = "Add cancelled: Subfolder has inherited permissions.";
+                    });
+                    return;
+                }
+
+                selectedGroup = (GroupItem)cmbGroups.SelectedItem;
+                string selectedGroupId = selectedGroup.Id;
+                string permissionLevel = cmbPermissions.SelectedItem.ToString();
+
+                if (permissionLevel == "No Direct Access")
+                {
+                    UpdateUI(() =>
+                    {
+                        MessageBox.Show("Use 'Remove Permission' to remove permissions.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        statusLabel.Text = "Add cancelled: Invalid permission level.";
+                    });
+                    return;
+                }
+
+                UpdateUI(() => statusLabel.Text = $"Adding permission for '{selectedGroup.DisplayName}' to '{subfolderName}'...");
                 var scopes = new[] { "https://tamucs.sharepoint.com/.default" };
                 var accounts = await _pca.GetAccountsAsync();
                 var authResult = await _pca.AcquireTokenSilent(scopes, accounts.FirstOrDefault()).ExecuteAsync();
 
-                using (var context = new ClientContext(_siteUrl))
+                const int maxRetries = 3;
+                int retryCount = 0;
+                bool success = false;
+                Exception lastException = null;
+                string subfolderRelativeUrl = null;
+
+                while (retryCount < maxRetries && !success)
                 {
-                    context.ExecutingWebRequest += (s, ev) =>
+                    try
                     {
-                        ev.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken;
-                    };
+                        using (var context = new ClientContext(_siteUrl))
+                        {
+                            context.ExecutingWebRequest += (s, ev) =>
+                            {
+                                ev.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken;
+                            };
 
-                    var web = context.Web;
-                    var library = web.Lists.GetByTitle(_libraryName);
-                    var subfolder = library.RootFolder.Folders.FirstOrDefault(f => f.Name == subfolderName);
-                    if (subfolder == null)
-                    {
-                        MessageBox.Show($"Subfolder '{subfolderName}' not found.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        lblStatus.Text = "Error: Subfolder not found.";
-                        return;
+                            context.Load(context.Web, w => w.ServerRelativeUrl);
+                            await context.ExecuteQueryAsync().ConfigureAwait(false);
+                            subfolderRelativeUrl = $"{context.Web.ServerRelativeUrl.TrimEnd('/')}/{_libraryName}/{subfolderName}";
+                            subfolderRelativeUrl = subfolderRelativeUrl.Replace("//", "/");
+
+                            Folder subfolder = context.Web.GetFolderByServerRelativeUrl(subfolderRelativeUrl);
+                            context.Load(subfolder, f => f.Name, f => f.ServerRelativeUrl, f => f.ListItemAllFields);
+                            var listItem = subfolder.ListItemAllFields;
+                            context.Load(listItem, l => l.HasUniqueRoleAssignments);
+                            context.Load(context.Web, s => s.RoleDefinitions);
+                            await context.ExecuteQueryAsync().ConfigureAwait(false);
+
+                            if (!listItem.HasUniqueRoleAssignments)
+                            {
+                                listItem.BreakRoleInheritance(true, false);
+                                await context.ExecuteQueryAsync().ConfigureAwait(false);
+                            }
+
+                            RoleAssignmentCollection roleAssignments = listItem.RoleAssignments;
+                            context.Load(roleAssignments);
+                            await context.ExecuteQueryAsync().ConfigureAwait(false);
+
+                            // Log existing role assignments with detailed info
+                            var existingRAs = new List<string>();
+                            foreach (RoleAssignment ra in roleAssignments)
+                            {
+                                context.Load(ra.Member, m => m.LoginName, m => m.Title, m => m.PrincipalType);
+                                context.Load(ra.RoleDefinitionBindings);
+                                await context.ExecuteQueryAsync().ConfigureAwait(false);
+                                var roleNames = string.Join(", ", ra.RoleDefinitionBindings.Select(rdb => rdb.Name ?? "Null").ToList());
+                                existingRAs.Add($"LoginName: {ra.Member.LoginName}, Title: {ra.Member.Title ?? "None"}, PrincipalType: {ra.Member.PrincipalType}, Roles: {(string.IsNullOrEmpty(roleNames) ? "None" : roleNames)}");
+                            }
+                            await _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermissionDebug", _libraryName, selectedGroup.DisplayName, "Subfolder", $"Pre-addition RAs for '{subfolderName}': {string.Join(" | ", existingRAs)}");
+
+                            string groupPrincipalId = $"c:0t.c|tenant|{selectedGroupId}";
+                            bool hasEffectivePermissions = false;
+                            var detectedRoles = new List<string>();
+                            foreach (RoleAssignment ra in roleAssignments)
+                            {
+                                try
+                                {
+                                    context.Load(ra.Member, m => m.LoginName, m => m.PrincipalType);
+                                    context.Load(ra.RoleDefinitionBindings);
+                                    await context.ExecuteQueryAsync().ConfigureAwait(false);
+                                    if (ra.Member.LoginName == groupPrincipalId)
+                                    {
+                                        var validPermissionRoles = new[] { "Read", "Contribute", "Edit", "Full Control", "Limited Access" };
+                                        var roleNames = ra.RoleDefinitionBindings
+                                            .Select(rdb => rdb.Name)
+                                            .Where(name => name != null && validPermissionRoles.Contains(name))
+                                            .ToList();
+                                        if (roleNames.Any())
+                                        {
+                                            hasEffectivePermissions = true;
+                                            detectedRoles.AddRange(roleNames);
+                                        }
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    // Log potential CSOM errors but continue checking other role assignments
+                                    await _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermissionWarning", _libraryName, selectedGroup.DisplayName, "Subfolder", $"Non-critical error checking role assignment for '{ra.Member?.LoginName ?? "Unknown"}' on '{subfolderName}': {ex.Message}, Inner Exception: {(ex.InnerException != null ? ex.InnerException.Message : "None")}");
+                                }
+                            }
+
+                            if (hasEffectivePermissions)
+                            {
+                                // Log the warning instead of showing a message box
+                                await _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermissionWarning", _libraryName, selectedGroup.DisplayName, "Subfolder", $"Group '{groupPrincipalId}' detected with permissions ({string.Join(", ", detectedRoles)}) on '{subfolderName}'. Proceeding with addition to ensure correct permissions.");
+                            }
+
+                            var principal = context.Web.EnsureUser(groupPrincipalId);
+                            context.Load(principal, p => p.LoginName, p => p.Title, p => p.PrincipalType);
+                            try
+                            {
+                                await context.ExecuteQueryAsync().ConfigureAwait(false);
+                            }
+                            catch (Exception ex)
+                            {
+                                throw new Exception($"Failed to ensure user '{groupPrincipalId}': {ex.Message}", ex);
+                            }
+
+                            var roleDefinitions = context.Web.RoleDefinitions;
+                            context.Load(roleDefinitions);
+                            await context.ExecuteQueryAsync().ConfigureAwait(false);
+
+                            string targetRoleName = permissionLevel == "Edit" ? "Contribute" : permissionLevel;
+                            var roleDefinition = roleDefinitions.FirstOrDefault(rd => rd.Name == targetRoleName);
+                            if (roleDefinition == null)
+                            {
+                                UpdateUI(() =>
+                                {
+                                    MessageBox.Show($"Permission level '{permissionLevel}' not found.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                                    statusLabel.Text = "Error: Permission level not found.";
+                                });
+                                await _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermissionError", _libraryName, selectedGroup.DisplayName, "Subfolder", $"Permission level '{permissionLevel}' not found for subfolder '{subfolderName}'");
+                                return;
+                            }
+
+                            var roleDefinitionBindings = new RoleDefinitionBindingCollection(context);
+                            roleDefinitionBindings.Add(roleDefinition);
+                            listItem.RoleAssignments.Add(principal, roleDefinitionBindings);
+                            listItem.Update();
+                            try
+                            {
+                                await context.ExecuteQueryAsync().ConfigureAwait(false);
+                            }
+                            catch (Exception ex)
+                            {
+                                throw new Exception($"Failed to add role assignment for '{groupPrincipalId}' with role '{targetRoleName}': {ex.Message}", ex);
+                            }
+
+                            // Verify addition
+                            context.Load(roleAssignments, ras => ras.Include(ra => ra.Member, ra => ra.RoleDefinitionBindings));
+                            foreach (RoleAssignment ra in roleAssignments)
+                            {
+                                context.Load(ra.Member, m => m.LoginName);
+                                context.Load(ra.RoleDefinitionBindings);
+                            }
+                            await context.ExecuteQueryAsync().ConfigureAwait(false);
+                            var updatedRAs = new List<string>();
+                            bool permissionAdded = false;
+                            foreach (RoleAssignment ra in roleAssignments)
+                            {
+                                var roleNames = string.Join(", ", ra.RoleDefinitionBindings.Select(rdb => rdb.Name ?? "Null").ToList());
+                                updatedRAs.Add($"LoginName: {ra.Member.LoginName}, Roles: {(string.IsNullOrEmpty(roleNames) ? "None" : roleNames)}");
+                                if (ra.Member.LoginName == groupPrincipalId && ra.RoleDefinitionBindings.Any(rdb => rdb.Name == targetRoleName))
+                                {
+                                    permissionAdded = true;
+                                }
+                            }
+                            await _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermissionDebug", _libraryName, selectedGroup.DisplayName, "Subfolder", $"Post-addition RAs for '{subfolderName}': {string.Join(" | ", updatedRAs)}");
+                            if (!permissionAdded)
+                            {
+                                throw new Exception($"Permission '{targetRoleName}' for group '{selectedGroup.DisplayName}' was not applied to '{subfolderName}'.");
+                            }
+
+                            // Ensure DataGridView columns are initialized
+                            UpdateUI(() =>
+                            {
+                                // Check if columns exist, add them if missing
+                                if (dgvGroupPermissions.Columns.Count == 0)
+                                {
+                                    dgvGroupPermissions.Columns.Add("colGroupName", "Group Name");
+                                    dgvGroupPermissions.Columns.Add("colPermission", "Permission");
+                                    dgvGroupPermissions.Columns.Add("colGroupId", "Group ID");
+                                    dgvGroupPermissions.Columns["colGroupName"].Width = 300;
+                                    dgvGroupPermissions.Columns["colPermission"].Width = 100;
+                                    dgvGroupPermissions.Columns["colGroupId"].Visible = false;
+                                }
+
+                                statusLabel.Text = $"Added '{permissionLevel}' permission for '{selectedGroup.DisplayName}' to '{subfolderName}'.";
+                                try
+                                {
+                                    dgvGroupPermissions.Rows.Add(selectedGroup.DisplayName, permissionLevel, selectedGroupId);
+                                }
+                                catch (Exception ex)
+                                {
+                                    // Log the DataGridView error but don't show to user
+                                    _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermissionWarning", _libraryName, selectedGroup.DisplayName, "Subfolder", $"Failed to update DataGridView for '{subfolderName}': {ex.Message}, StackTrace: {ex.StackTrace}");
+                                }
+                                LoadCurrentPermissionsAsync();
+                                lvSubfolders_SelectedIndexChanged(null, EventArgs.Empty);
+                            });
+
+                            await _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermission", _libraryName, selectedGroup.DisplayName, "Subfolder", $"Added '{permissionLevel}' permission for group '{selectedGroup.DisplayName}' to subfolder '{subfolderName}' in library '{_libraryName}'");
+
+                            success = true;
+                        }
                     }
-
-                    context.Load(subfolder.ListItemAllFields.RoleAssignments, ras => ras.Include(ra => ra.Member.LoginName));
-                    await context.ExecuteQueryAsync();
-
-                    string groupPrincipalId = $"c:0t.c|tenant|{selectedGroupId}";
-                    if (subfolder.ListItemAllFields.RoleAssignments.Any(ra => ra.Member.LoginName == groupPrincipalId))
+                    catch (Exception ex)
                     {
-                        MessageBox.Show($"Group '{selectedGroup.DisplayName}' already has permissions. Use 'Change Selected' to modify.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        lblStatus.Text = "Add cancelled: Group already assigned.";
-                        return;
+                        lastException = ex;
+                        retryCount++;
+                        if (retryCount < maxRetries)
+                        {
+                            await _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermissionRetry", _libraryName, selectedGroup?.DisplayName, "Subfolder", $"Retry {retryCount} for adding permission to '{subfolderName}': {ex.Message}, Inner Exception: {(ex.InnerException != null ? ex.InnerException.Message : "None")}");
+                            await Task.Delay(1000 * retryCount);
+                            continue;
+                        }
+
+                        UpdateUI(() =>
+                        {
+                            MessageBox.Show($"Failed to add permission after {maxRetries} attempts: {ex.Message}\nInner Exception: {(ex.InnerException != null ? ex.InnerException.Message : "None")}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            statusLabel.Text = "Error adding permission.";
+                        });
+                        await _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermissionError", _libraryName, selectedGroup?.DisplayName, "Subfolder", $"Failed to add permission to subfolder '{subfolderName ?? "unknown"}' at '{subfolderRelativeUrl}': {ex.Message}, Inner Exception: {(ex.InnerException != null ? ex.InnerException.Message : "None")}, StackTrace: {ex.StackTrace}");
                     }
-
-                    var principal = web.EnsureUser(groupPrincipalId);
-                    context.Load(principal);
-                    await context.ExecuteQueryAsync();
-
-                    var roleDefinitions = web.RoleDefinitions;
-                    context.Load(roleDefinitions);
-                    await context.ExecuteQueryAsync();
-
-                    string roleName = permissionLevel == "Edit" ? "Contribute" : permissionLevel;
-                    var roleDefinition = roleDefinitions.FirstOrDefault(rd => rd.Name == roleName);
-                    if (roleDefinition == null)
-                    {
-                        MessageBox.Show($"Permission level '{permissionLevel}' not found.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        lblStatus.Text = "Error: Permission level not found.";
-                        await _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermissionError", _libraryName, selectedGroup.DisplayName, "Subfolder", $"Permission level '{permissionLevel}' not found for subfolder '{subfolderName}'");
-                        return;
-                    }
-
-                    var roleDefinitionBindings = new RoleDefinitionBindingCollection(context);
-                    roleDefinitionBindings.Add(roleDefinition);
-                    subfolder.ListItemAllFields.RoleAssignments.Add(principal, roleDefinitionBindings);
-                    await context.ExecuteQueryAsync();
-
-                    await _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermission", _libraryName, selectedGroup.DisplayName, "Subfolder", $"Added '{permissionLevel}' permission for group '{selectedGroup.DisplayName}' to subfolder '{subfolderName}' in library '{_libraryName}'");
-                    lblStatus.Text = $"Added '{permissionLevel}' permission for '{selectedGroup.DisplayName}' to '{subfolderName}'.";
-                    LoadCurrentPermissionsAsync();
-                    lvPermissions_SelectedIndexChanged(null, EventArgs.Empty);
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to add permission: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                await _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermissionError", _libraryName, selectedGroup?.DisplayName, "Subfolder", $"Failed to add permission to subfolder '{subfolderName}': {ex.Message}");
-                lblStatus.Text = "Error adding permission.";
+                UpdateUI(() =>
+                {
+                    MessageBox.Show($"Failed to add permission: {ex.Message}\nInner Exception: {(ex.InnerException != null ? ex.InnerException.Message : "None")}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    statusLabel.Text = "Error adding permission.";
+                });
+                await _auditLogManager.LogAction(_signedInUserId, null, "AddSubfolderPermissionError", _libraryName, selectedGroup?.DisplayName, "Subfolder", $"Failed to add permission to subfolder '{subfolderName ?? "unknown"}': {ex.Message}, Inner Exception: {(ex.InnerException != null ? ex.InnerException.Message : "None")}");
+            }
+            finally
+            {
+                UpdateUI(() => btnAdd.Enabled = true);
             }
         }
+
 
         private async void btnRemove_Click(object sender, EventArgs e)
         {
