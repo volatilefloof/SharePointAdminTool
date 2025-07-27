@@ -16,11 +16,17 @@ The program automates tasks such as:
 5. Ability to manipulate site collections directly
 
 _5: Leverage the ability to directly manipulate root and subfolder level permissions using backend CSOM operations_
+
 _5a: Ability to gather storage metric analytics across multiple site collections at scale_
+
 _5b: Ability to view other metrics, e.g., list view index threshold, total size of objects such as document libraries_
+
 _5c: Ability to scan document libraries for the 259-character path limitation_
+
 _5d: File/folder link generator_
+
 _5e: Compliance and governance validator + Retention Policy Risk Detector_
+
 _5f: Predictive Risk Modeling: Predict likelihood of OneDrive Sync Failures and score risk depending on path length, sync depth, or filename patterns_
 
 ## Technologies used:
