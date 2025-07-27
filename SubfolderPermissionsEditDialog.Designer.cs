@@ -1,4 +1,4 @@
-﻿namespace EntraGroupsApp
+namespace EntraGroupsApp
 {
     partial class SubfolderPermissionsEditDialog
     {
@@ -6,248 +6,194 @@
         {
             this.components = new System.ComponentModel.Container();
             this.tvSubfolders = new System.Windows.Forms.TreeView();
-            this.imageListIcons = new System.Windows.Forms.ImageList(this.components);
-            this.pnlSidebar = new System.Windows.Forms.Panel();
+            this.treeViewImageList = new System.Windows.Forms.ImageList(this.components);
             this.btnAdd = new System.Windows.Forms.Button();
-            this.btnChange = new System.Windows.Forms.Button();
             this.btnRemove = new System.Windows.Forms.Button();
+            this.btnChange = new System.Windows.Forms.Button();
             this.btnBreakInheritance = new System.Windows.Forms.Button();
             this.btnResetPermissions = new System.Windows.Forms.Button();
-            this.cmbGroups = new System.Windows.Forms.ComboBox();
-            this.cmbPermissions = new System.Windows.Forms.ComboBox();
-            this.lblSelectedItem = new System.Windows.Forms.Label();
+            this.btnRefresh = new System.Windows.Forms.Button();
             this.statusLabel = new System.Windows.Forms.Label();
-            this.toolStrip = new System.Windows.Forms.ToolStrip();
-            this.txtSearch = new System.Windows.Forms.ToolStripTextBox();
-            this.cmbView = new System.Windows.Forms.ToolStripComboBox();
-            this.btnRefresh = new System.Windows.Forms.ToolStripButton();
-            this.btnClose = new System.Windows.Forms.ToolStripButton();
-            this.toolTip = new System.Windows.Forms.ToolTip(this.components);
-            this.pnlSidebar.SuspendLayout();
-            this.toolStrip.SuspendLayout();
-            this.SuspendLayout();
-            // 
+            this.txtSearch = new System.Windows.Forms.TextBox();
+            this.cmbView = new System.Windows.Forms.ComboBox();
+            this.cmbGroups = new System.Windows.Forms.ComboBox();  // Fixed: Changed from CheckedListBox (clbGroups) to ComboBox (cmbGroups) for single-select consistency.
+            this.lblSelectedItem = new System.Windows.Forms.Label();
+            this.chkRead = new System.Windows.Forms.CheckBox();
+            this.chkEdit = new System.Windows.Forms.CheckBox();
+            this.chkNoAccess = new System.Windows.Forms.CheckBox();
+            this.toolTipGroups = new System.Windows.Forms.ToolTip(this.components);  // Added: Initialized toolTipGroups from your class declarations; can be used for group hover tips.
+
+            // treeViewImageList
+            this.treeViewImageList.ImageSize = new System.Drawing.Size(12, 12);
+            this.treeViewImageList.Images.Add("Folder", System.Drawing.SystemIcons.Application.ToBitmap());
+            this.treeViewImageList.Images.Add("Group", System.Drawing.SystemIcons.WinLogo.ToBitmap());
+
             // tvSubfolders
-            // 
-            this.tvSubfolders.ImageIndex = 0;
-            this.tvSubfolders.ImageList = this.imageListIcons;
-            this.tvSubfolders.Location = new System.Drawing.Point(12, 37);
+            this.tvSubfolders.ImageList = this.treeViewImageList;
+            this.tvSubfolders.Location = new System.Drawing.Point(12, 12);
             this.tvSubfolders.Name = "tvSubfolders";
-            this.tvSubfolders.SelectedImageIndex = 0;
-            this.tvSubfolders.Size = new System.Drawing.Size(438, 463);
+            this.tvSubfolders.Size = new System.Drawing.Size(400, 400);
             this.tvSubfolders.TabIndex = 0;
             this.tvSubfolders.AfterSelect += new System.Windows.Forms.TreeViewEventHandler(this.tvSubfolders_AfterSelect);
-            this.tvSubfolders.NodeMouseClick += new System.Windows.Forms.TreeNodeMouseClickEventHandler(this.tvSubfolders_NodeMouseClick);
-            this.toolTip.SetToolTip(this.tvSubfolders, "Select a subfolder or group to view or modify permissions. Right-click for more options.");
-            // 
-            // imageListIcons
-            // 
-            this.imageListIcons.TransparentColor = System.Drawing.Color.Transparent;
-            this.imageListIcons.Images.Add("Folder", System.Drawing.SystemIcons.WinLogo);
-            this.imageListIcons.Images.Add("Group", System.Drawing.SystemIcons.WinLogo);
-            // 
-            // pnlSidebar
-            // 
-            this.pnlSidebar.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
-            this.pnlSidebar.Controls.Add(this.btnAdd);
-            this.pnlSidebar.Controls.Add(this.btnChange);
-            this.pnlSidebar.Controls.Add(this.btnRemove);
-            this.pnlSidebar.Controls.Add(this.btnBreakInheritance);
-            this.pnlSidebar.Controls.Add(this.btnResetPermissions);
-            this.pnlSidebar.Controls.Add(this.cmbGroups);
-            this.pnlSidebar.Controls.Add(this.cmbPermissions);
-            this.pnlSidebar.Controls.Add(this.lblSelectedItem);
-            this.pnlSidebar.Controls.Add(this.statusLabel);
-            this.pnlSidebar.Location = new System.Drawing.Point(456, 37);
-            this.pnlSidebar.Name = "pnlSidebar";
-            this.pnlSidebar.Size = new System.Drawing.Size(200, 463);
-            this.pnlSidebar.TabIndex = 1;
-            // 
+
             // btnAdd
-            // 
-            this.btnAdd.Location = new System.Drawing.Point(10, 180);
+            this.btnAdd.Location = new System.Drawing.Point(420, 12);
             this.btnAdd.Name = "btnAdd";
-            this.btnAdd.Size = new System.Drawing.Size(180, 25);
-            this.btnAdd.TabIndex = 0;
+            this.btnAdd.Size = new System.Drawing.Size(460, 30);
+            this.btnAdd.TabIndex = 1;
             this.btnAdd.Text = "Add Permission";
             this.btnAdd.UseVisualStyleBackColor = true;
             this.btnAdd.Click += new System.EventHandler(this.btnAdd_Click);
-            this.toolTip.SetToolTip(this.btnAdd, "Add the selected group with the chosen permission to the subfolder.");
-            // 
-            // btnChange
-            // 
-            this.btnChange.Location = new System.Drawing.Point(10, 210);
-            this.btnChange.Name = "btnChange";
-            this.btnChange.Size = new System.Drawing.Size(180, 25);
-            this.btnChange.TabIndex = 1;
-            this.btnChange.Text = "Change Permission";
-            this.btnChange.UseVisualStyleBackColor = true;
-            this.btnChange.Click += new System.EventHandler(this.btnChange_Click);
-            this.toolTip.SetToolTip(this.btnChange, "Change the permission type for the selected group.");
-            // 
+
             // btnRemove
-            // 
-            this.btnRemove.Location = new System.Drawing.Point(10, 240);
+            this.btnRemove.Location = new System.Drawing.Point(420, 50);
             this.btnRemove.Name = "btnRemove";
-            this.btnRemove.Size = new System.Drawing.Size(180, 25);
+            this.btnRemove.Size = new System.Drawing.Size(460, 30);
             this.btnRemove.TabIndex = 2;
-            this.btnRemove.Text = "Remove Permission";
+            this.btnRemove.Text = "Remove";
             this.btnRemove.UseVisualStyleBackColor = true;
             this.btnRemove.Click += new System.EventHandler(this.btnRemove_Click);
-            this.toolTip.SetToolTip(this.btnRemove, "Remove the selected group's permissions or all groups from the subfolder.");
-            // 
+
+            // btnChange
+            this.btnChange.Location = new System.Drawing.Point(420, 88);
+            this.btnChange.Name = "btnChange";
+            this.btnChange.Size = new System.Drawing.Size(460, 30);
+            this.btnChange.TabIndex = 3;
+            this.btnChange.Text = "Change";
+            this.btnChange.UseVisualStyleBackColor = true;
+            this.btnChange.Visible = false;
+
             // btnBreakInheritance
-            // 
-            this.btnBreakInheritance.Location = new System.Drawing.Point(10, 270);
+            this.btnBreakInheritance.Location = new System.Drawing.Point(420, 126);
             this.btnBreakInheritance.Name = "btnBreakInheritance";
-            this.btnBreakInheritance.Size = new System.Drawing.Size(180, 25);
-            this.btnBreakInheritance.TabIndex = 3;
+            this.btnBreakInheritance.Size = new System.Drawing.Size(460, 30);
+            this.btnBreakInheritance.TabIndex = 4;
             this.btnBreakInheritance.Text = "Break Inheritance";
             this.btnBreakInheritance.UseVisualStyleBackColor = true;
             this.btnBreakInheritance.Click += new System.EventHandler(this.btnBreakInheritance_Click);
-            this.toolTip.SetToolTip(this.btnBreakInheritance, "Break inheritance to allow unique permissions (clears all existing permissions).");
-            // 
+
             // btnResetPermissions
-            // 
-            this.btnResetPermissions.Location = new System.Drawing.Point(10, 300);
+            this.btnResetPermissions.Location = new System.Drawing.Point(420, 164);
             this.btnResetPermissions.Name = "btnResetPermissions";
-            this.btnResetPermissions.Size = new System.Drawing.Size(180, 25);
-            this.btnResetPermissions.TabIndex = 4;
+            this.btnResetPermissions.Size = new System.Drawing.Size(460, 30);
+            this.btnResetPermissions.TabIndex = 5;
             this.btnResetPermissions.Text = "Reset Permissions";
             this.btnResetPermissions.UseVisualStyleBackColor = true;
             this.btnResetPermissions.Click += new System.EventHandler(this.btnResetPermissions_Click);
-            this.toolTip.SetToolTip(this.btnResetPermissions, "Remove all group permissions from the selected subfolder.");
-            // 
-            // cmbGroups
-            // 
-            this.cmbGroups.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
-            this.cmbGroups.FormattingEnabled = true;
-            this.cmbGroups.Location = new System.Drawing.Point(10, 110);
-            this.cmbGroups.Name = "cmbGroups";
-            this.cmbGroups.Size = new System.Drawing.Size(180, 21);
-            this.cmbGroups.TabIndex = 5;
-            this.toolTip.SetToolTip(this.cmbGroups, "Select a CSG-CLBA-MKTG group to assign permissions.");
-            // 
-            // cmbPermissions
-            // 
-            this.cmbPermissions.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
-            this.cmbPermissions.FormattingEnabled = true;
-            this.cmbPermissions.Items.AddRange(new object[] { "Read", "Edit", "No Direct Access" });
-            this.cmbPermissions.Location = new System.Drawing.Point(10, 140);
-            this.cmbPermissions.Name = "cmbPermissions";
-            this.cmbPermissions.Size = new System.Drawing.Size(180, 21);
-            this.cmbPermissions.TabIndex = 6;
-            this.toolTip.SetToolTip(this.cmbPermissions, "Select the permission type for the group.");
-            // 
-            // lblSelectedItem
-            // 
-            this.lblSelectedItem.AutoSize = true;
-            this.lblSelectedItem.Location = new System.Drawing.Point(10, 10);
-            this.lblSelectedItem.Name = "lblSelectedItem";
-            this.lblSelectedItem.Size = new System.Drawing.Size(113, 13);
-            this.lblSelectedItem.Text = "Selected Item: None";
-            this.toolTip.SetToolTip(this.lblSelectedItem, "Shows the currently selected subfolder or group.");
-            // 
+
+            // btnRefresh
+            this.btnRefresh.Location = new System.Drawing.Point(420, 202);
+            this.btnRefresh.Name = "btnRefresh";
+            this.btnRefresh.Size = new System.Drawing.Size(460, 30);
+            this.btnRefresh.TabIndex = 6;
+            this.btnRefresh.Text = "Refresh";
+            this.btnRefresh.UseVisualStyleBackColor = true;
+            this.btnRefresh.Click += new System.EventHandler(this.btnRefresh_Click);
+
             // statusLabel
-            // 
-            this.statusLabel.AutoSize = false;
-            this.statusLabel.Location = new System.Drawing.Point(10, 350);
+            this.statusLabel.Location = new System.Drawing.Point(12, 420);
             this.statusLabel.Name = "statusLabel";
-            this.statusLabel.Size = new System.Drawing.Size(180, 100);
+            this.statusLabel.Size = new System.Drawing.Size(400, 23);
+            this.statusLabel.TabIndex = 8;
             this.statusLabel.Text = "Ready";
-            this.statusLabel.TextAlign = System.Drawing.ContentAlignment.TopLeft;
-            this.toolTip.SetToolTip(this.statusLabel, "Displays the status of recent actions.");
-            // 
-            // toolStrip
-            // 
-            this.toolStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
-                this.txtSearch,
-                this.cmbView,
-                this.btnRefresh,
-                this.btnClose});
-            this.toolStrip.Location = new System.Drawing.Point(0, 0);
-            this.toolStrip.Name = "toolStrip";
-            this.toolStrip.Size = new System.Drawing.Size(660, 25);
-            this.toolStrip.TabIndex = 2;
-            // 
+
             // txtSearch
-            // 
+            this.txtSearch.Location = new System.Drawing.Point(12, 480);
             this.txtSearch.Name = "txtSearch";
-            this.txtSearch.Size = new System.Drawing.Size(200, 25);
-            this.txtSearch.Text = "Search subfolders or groups...";
-            this.txtSearch.ToolTipText = "Filter subfolders or groups by name.";
-            // 
+            this.txtSearch.Size = new System.Drawing.Size(200, 20);
+            this.txtSearch.TabIndex = 10;
+
             // cmbView
-            // 
+            this.cmbView.Location = new System.Drawing.Point(220, 480);
+            this.cmbView.Name = "cmbView";
             this.cmbView.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
             this.cmbView.Items.AddRange(new object[] { "All Subfolders", "Unique Permissions Only", "Inherited Permissions Only" });
-            this.cmbView.Name = "cmbView";
-            this.cmbView.Size = new System.Drawing.Size(150, 25);
-            this.cmbView.ToolTipText = "Filter subfolders by permission type.";
-            // 
-            // btnRefresh
-            // 
-            this.btnRefresh.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
-            this.btnRefresh.Text = "Refresh";
-            this.btnRefresh.Name = "btnRefresh";
-            this.btnRefresh.Size = new System.Drawing.Size(60, 22);
-            this.btnRefresh.ToolTipText = "Refresh the list of subfolders and permissions.";
-            this.btnRefresh.Click += new System.EventHandler(this.btnRefresh_Click);
-            // 
-            // btnClose
-            // 
-            this.btnClose.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
-            this.btnClose.Text = "Close";
-            this.btnClose.Name = "btnClose";
-            this.btnClose.Size = new System.Drawing.Size(60, 22);
-            this.btnClose.ToolTipText = "Close the dialog.";
-            this.btnClose.Click += new System.EventHandler(this.btnClose_Click);
-            // 
-            // toolTip
-            // 
-            this.toolTip.AutoPopDelay = 5000;
-            this.toolTip.InitialDelay = 500;
-            this.toolTip.ReshowDelay = 100;
-            // 
+            this.cmbView.Size = new System.Drawing.Size(192, 21);
+            this.cmbView.TabIndex = 11;
+
+            // cmbGroups (Fixed: Replaced clbGroups with cmbGroups; set DropDownStyle to DropDownList for selection consistency)
+            this.cmbGroups.Location = new System.Drawing.Point(420, 240);
+            this.cmbGroups.Name = "cmbGroups";
+            this.cmbGroups.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.cmbGroups.Size = new System.Drawing.Size(460, 100);
+            this.cmbGroups.TabIndex = 12;
+            // Added: Optional toolTip for groups (e.g., show group ID or description on hover).
+            this.toolTipGroups.SetToolTip(this.cmbGroups, "Select a group to assign permissions.");
+
+            // lblSelectedItem
+            this.lblSelectedItem.Location = new System.Drawing.Point(420, 350);
+            this.lblSelectedItem.Name = "lblSelectedItem";
+            this.lblSelectedItem.Size = new System.Drawing.Size(460, 23);
+            this.lblSelectedItem.TabIndex = 13;
+            this.lblSelectedItem.Text = "Selected Item: None";
+
+            // chkRead
+            this.chkRead.Location = new System.Drawing.Point(420, 380);
+            this.chkRead.Name = "chkRead";
+            this.chkRead.Size = new System.Drawing.Size(150, 24);
+            this.chkRead.TabIndex = 14;
+            this.chkRead.Text = "Read";
+            this.chkRead.UseVisualStyleBackColor = true;
+            this.chkRead.CheckedChanged += new System.EventHandler(this.chkPermission_CheckedChanged);
+
+            // chkEdit
+            this.chkEdit.Location = new System.Drawing.Point(570, 380);
+            this.chkEdit.Name = "chkEdit";
+            this.chkEdit.Size = new System.Drawing.Size(150, 24);
+            this.chkEdit.TabIndex = 15;
+            this.chkEdit.Text = "Edit";
+            this.chkEdit.UseVisualStyleBackColor = true;
+            this.chkEdit.CheckedChanged += new System.EventHandler(this.chkPermission_CheckedChanged);
+
+            // chkNoAccess
+            this.chkNoAccess.Location = new System.Drawing.Point(720, 380);
+            this.chkNoAccess.Name = "chkNoAccess";
+            this.chkNoAccess.Size = new System.Drawing.Size(160, 24);
+            this.chkNoAccess.TabIndex = 16;
+            this.chkNoAccess.Text = "No Access";
+            this.chkNoAccess.UseVisualStyleBackColor = true;
+            this.chkNoAccess.CheckedChanged += new System.EventHandler(this.chkPermission_CheckedChanged);
+
             // SubfolderPermissionsEditDialog
-            // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(660, 510);
-            this.Controls.Add(this.tvSubfolders);
-            this.Controls.Add(this.pnlSidebar);
-            this.Controls.Add(this.toolStrip);
-            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
+            this.ClientSize = new System.Drawing.Size(900, 600);
+            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
-            this.MinimizeBox = false;
+            this.Controls.Add(this.chkNoAccess);
+            this.Controls.Add(this.chkEdit);
+            this.Controls.Add(this.chkRead);
+            this.Controls.Add(this.lblSelectedItem);
+            this.Controls.Add(this.cmbGroups);  // Fixed: Added cmbGroups to controls (was clbGroups).
+            this.Controls.Add(this.cmbView);
+            this.Controls.Add(this.txtSearch);
+            this.Controls.Add(this.statusLabel);
+            this.Controls.Add(this.btnRefresh);
+            this.Controls.Add(this.btnResetPermissions);
+            this.Controls.Add(this.btnBreakInheritance);
+            this.Controls.Add(this.btnChange);
+            this.Controls.Add(this.btnRemove);
+            this.Controls.Add(this.btnAdd);
+            this.Controls.Add(this.tvSubfolders);
             this.Name = "SubfolderPermissionsEditDialog";
-            this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
             this.Text = "Edit Subfolder Permissions";
-            this.pnlSidebar.ResumeLayout(false);
-            this.pnlSidebar.PerformLayout();
-            this.toolStrip.ResumeLayout(false);
-            this.toolStrip.PerformLayout();
             this.ResumeLayout(false);
-            this.PerformLayout();
         }
-
         private System.Windows.Forms.TreeView tvSubfolders;
-        private System.Windows.Forms.ImageList imageListIcons;
-        private System.Windows.Forms.Panel pnlSidebar;
+        private System.Windows.Forms.ImageList treeViewImageList;
         private System.Windows.Forms.Button btnAdd;
-        private System.Windows.Forms.Button btnChange;
         private System.Windows.Forms.Button btnRemove;
+        private System.Windows.Forms.Button btnChange;
         private System.Windows.Forms.Button btnBreakInheritance;
         private System.Windows.Forms.Button btnResetPermissions;
-        private System.Windows.Forms.ComboBox cmbGroups;
-        private System.Windows.Forms.ComboBox cmbPermissions;
-        private System.Windows.Forms.Label lblSelectedItem;
+        private System.Windows.Forms.Button btnRefresh;
         private System.Windows.Forms.Label statusLabel;
-        private System.Windows.Forms.ToolStrip toolStrip;
-        private System.Windows.Forms.ToolStripTextBox txtSearch;
-        private System.Windows.Forms.ToolStripComboBox cmbView;
-        private System.Windows.Forms.ToolStripButton btnRefresh;
-        private System.Windows.Forms.ToolStripButton btnClose;
-        private System.Windows.Forms.ToolTip toolTip;
+        private System.Windows.Forms.TextBox txtSearch;
+        private System.Windows.Forms.ComboBox cmbView;
+        private System.Windows.Forms.CheckedListBox clbGroups;
+        private System.Windows.Forms.Label lblSelectedItem;
+        private System.Windows.Forms.CheckBox chkRead;
+        private System.Windows.Forms.CheckBox chkEdit;
+        private System.Windows.Forms.CheckBox chkNoAccess;
     }
 }
