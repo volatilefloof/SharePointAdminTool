@@ -13,6 +13,7 @@ using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using System.Threading;
 using Microsoft.Extensions.Caching.Memory;
 using System.Drawing;
+using System.Reflection;
 
 namespace EntraGroupsApp
 {
@@ -37,6 +38,8 @@ namespace EntraGroupsApp
         private readonly string _placeholderText = "Search subfolders or groups...";
         private TreeNodeCollection _originalNodes;
         private List<(string SubfolderName, bool HasUniquePermissions, List<(string GroupName, string GroupId, string Role)> Groups)> _subfolderCache;
+        private readonly string _selectedDepartment;
+        private readonly Dictionary<string, (string SiteUrl, string[] GroupPrefixes)> _departmentMappings; //dynamically determine available groups in the dropdown using dictionary reference
 
         // Updated cache structure for nested folders
         private List<(string FullPath, string FolderName, int Level, bool HasUniquePermissions,
@@ -48,7 +51,7 @@ namespace EntraGroupsApp
         private bool isHandlingCheck = false;
         private int _maxNestingLevel = 3; // Configurable maximum nesting depth
 
-        public SubfolderPermissionsEditDialog(string libraryName, IPublicClientApplication pca, string siteUrl, GraphServiceClient graphClient, AuditLogManager auditLogManager, string signedInUserId)
+        public SubfolderPermissionsEditDialog(string libraryName, IPublicClientApplication pca, string siteUrl, GraphServiceClient graphClient, AuditLogManager auditLogManager, string signedInUserId, string selectedDepartment, Dictionary<string, (string SiteUrl, string[] GroupPrefixes)> departmentMappings = null)
         {
             try
             {
@@ -67,9 +70,12 @@ namespace EntraGroupsApp
                 _nestedSubfolderCache = new List<(string FullPath, string FolderName, int Level, bool HasUniquePermissions,
                     List<(string GroupName, string GroupId, string Role)> Groups, bool HasChildren)>();
                 _cancellationTokenSource = new CancellationTokenSource();
+                _selectedDepartment = selectedDepartment; // Store the selected department
+                _departmentMappings = departmentMappings; // Store the department mappings
 
                 InitializeComponent();
                 InitializeUIEnhancements();
+                SetupCustomTreeViewIcons();
 
                 this.Text = $"Edit Subfolder Permissions: {libraryName}";
                 lblLibrary.Text = $"Library: {libraryName}";
@@ -249,6 +255,88 @@ namespace EntraGroupsApp
             });
         }
 
+        private (List<string> ExpandedPaths, string SelectedPath) CaptureTreeViewState()
+        {
+            var expandedPaths = new List<string>();
+            string selectedPath = null;
+
+            if (tvSubfolders != null)
+            {
+                // Capture expanded nodes
+                CaptureExpandedNodes(tvSubfolders.Nodes, expandedPaths);
+
+                // Capture selected node
+                if (tvSubfolders.SelectedNode?.Tag is TreeNodeData selectedData && selectedData.IsSubfolder)
+                {
+                    selectedPath = selectedData.FullPath;
+                }
+            }
+
+            return (expandedPaths, selectedPath);
+        }
+
+        private void CaptureExpandedNodes(TreeNodeCollection nodes, List<string> expandedPaths)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                if (node.IsExpanded && node.Tag is TreeNodeData nodeData && nodeData.IsSubfolder && !string.IsNullOrEmpty(nodeData.FullPath))
+                {
+                    expandedPaths.Add(nodeData.FullPath);
+                }
+                if (node.Nodes.Count > 0)
+                {
+                    CaptureExpandedNodes(node.Nodes, expandedPaths);
+                }
+            }
+        }
+
+        // Helper method to restore TreeView state
+        private void RestoreTreeViewState(List<string> expandedPaths, string selectedPath)
+        {
+            if (tvSubfolders == null) return;
+
+            try
+            {
+                isUpdatingTreeView = true;
+
+                // Restore expanded state
+                RestoreExpandedNodes(tvSubfolders.Nodes, expandedPaths);
+
+                // Restore selected node
+                if (!string.IsNullOrEmpty(selectedPath))
+                {
+                    var nodeToSelect = FindNodeByPath(tvSubfolders.Nodes, selectedPath);
+                    if (nodeToSelect != null)
+                    {
+                        tvSubfolders.SelectedNode = nodeToSelect;
+                        nodeToSelect.EnsureVisible();
+                    }
+                }
+            }
+            finally
+            {
+                isUpdatingTreeView = false;
+            }
+        }
+
+        // Helper method to recursively restore expanded nodes
+        private void RestoreExpandedNodes(TreeNodeCollection nodes, List<string> expandedPaths)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                if (node.Tag is TreeNodeData nodeData && nodeData.IsSubfolder &&
+                    !string.IsNullOrEmpty(nodeData.FullPath) && expandedPaths.Contains(nodeData.FullPath))
+                {
+                    node.Expand();
+                }
+                if (node.Nodes.Count > 0)
+                {
+                    RestoreExpandedNodes(node.Nodes, expandedPaths);
+                }
+            }
+        }
+
+
         private IEnumerable<Control> GetAllControls(Control parent)
         {
             foreach (Control control in parent.Controls)
@@ -364,6 +452,230 @@ namespace EntraGroupsApp
             {
                 isUpdatingTreeView = false;
             }
+        }
+
+        private void SetupCustomTreeViewIcons()
+        {
+            try
+            {
+                // Clear any existing images
+                treeViewImageList.Images.Clear();
+
+                // Set the image size to match your bitmap
+                treeViewImageList.ImageSize = new Size(12, 12);
+
+                // Load your custom bitmap
+                string bitmapPath = Path.Combine(Application.StartupPath, "icons8-folder-13.png");
+
+                if (System.IO.File.Exists(bitmapPath))
+                {
+                    using (var bitmap = new Bitmap(bitmapPath))
+                    {
+                        // Add the same image for both folder and group icons
+                        // Index 0: Folder icon
+                        treeViewImageList.Images.Add("folder", new Bitmap(bitmap));
+
+                        // Index 1: Group icon (you could use the same or a different variation)
+                        treeViewImageList.Images.Add("group", new Bitmap(bitmap));
+
+                        // Optional: Add a third icon for preview items
+                        // Index 2: Preview icon (maybe with some modification)
+                        var previewBitmap = new Bitmap(bitmap);
+                        using (var g = Graphics.FromImage(previewBitmap))
+                        {
+                            // Add a small "P" overlay for preview items
+                            using (var brush = new SolidBrush(Color.Green))
+                            using (var font = new Font("Arial", 8, FontStyle.Bold))
+                            {
+                                g.DrawString("P", font, brush, new PointF(16, 16));
+                            }
+                        }
+                        treeViewImageList.Images.Add("preview", previewBitmap);
+                    }
+
+                    System.Diagnostics.Debug.WriteLine($"Custom TreeView icons loaded successfully from {bitmapPath}");
+                }
+                else
+                {
+                    // Fallback: Create simple colored rectangles if bitmap file not found
+                    CreateFallbackIcons();
+                    System.Diagnostics.Debug.WriteLine($"Bitmap file not found at {bitmapPath}, using fallback icons");
+                }
+
+                // Assign the ImageList to the TreeView
+                tvSubfolders.ImageList = treeViewImageList;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error loading custom TreeView icons: {ex.Message}");
+                CreateFallbackIcons();
+            }
+        }
+
+        private void SetupCustomTreeViewIconsFromResource()
+        {
+            try
+            {
+                treeViewImageList.Images.Clear();
+                treeViewImageList.ImageSize = new Size(24, 24);
+                treeViewImageList.ColorDepth = ColorDepth.Depth32Bit;
+
+                // Replace "YourProjectName" with your actual project name
+                var assembly = Assembly.GetExecutingAssembly();
+                string resourceName = "EntraGroupsApp.j.bmp"; // Format: Namespace.FileName
+
+                // List all resources to debug
+                var resourceNames = assembly.GetManifestResourceNames();
+                System.Diagnostics.Debug.WriteLine("Available resources:");
+                foreach (var name in resourceNames)
+                {
+                    System.Diagnostics.Debug.WriteLine($"  - {name}");
+                }
+
+                using (var stream = assembly.GetManifestResourceStream(resourceName))
+                {
+                    if (stream != null)
+                    {
+                        using (var bitmap = new Bitmap(stream))
+                        {
+                            // Ensure proper size
+                            var resizedBitmap = new Bitmap(bitmap, new Size(24, 24));
+
+                            treeViewImageList.Images.Add("folder", new Bitmap(resizedBitmap));
+                            treeViewImageList.Images.Add("group", new Bitmap(resizedBitmap));
+
+                            // Create preview version
+                            var previewBitmap = new Bitmap(resizedBitmap);
+                            using (var g = Graphics.FromImage(previewBitmap))
+                            {
+                                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                                using (var brush = new SolidBrush(Color.Red))
+                                using (var font = new Font("Arial", 8, FontStyle.Bold))
+                                {
+                                    g.DrawString("P", font, brush, new PointF(16, 16));
+                                }
+                            }
+                            treeViewImageList.Images.Add("preview", previewBitmap);
+                        }
+                        System.Diagnostics.Debug.WriteLine("Icons loaded from embedded resource");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Resource not found: {resourceName}");
+                        CreateFallbackIcons();
+                    }
+                }
+
+                tvSubfolders.ImageList = treeViewImageList;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error loading from resource: {ex.Message}");
+                CreateFallbackIcons();
+            }
+        }
+
+        // Fallback method if bitmap file is not found
+        private void CreateFallbackIcons()
+        {
+            treeViewImageList.Images.Clear();
+            treeViewImageList.ImageSize = new Size(16, 16); // Standard size for fallback
+
+            // Create simple colored rectangles as fallback
+            var folderIcon = new Bitmap(16, 16);
+            using (var g = Graphics.FromImage(folderIcon))
+            {
+                g.Clear(Color.Transparent);
+                g.FillRectangle(Brushes.SkyBlue, 2, 2, 12, 12);
+                g.DrawRectangle(Pens.DarkBlue, 2, 2, 12, 12);
+            }
+
+            var groupIcon = new Bitmap(16, 16);
+            using (var g = Graphics.FromImage(groupIcon))
+            {
+                g.Clear(Color.Transparent);
+                g.FillRectangle(Brushes.LightGreen, 2, 2, 12, 12);
+                g.DrawRectangle(Pens.DarkGreen, 2, 2, 12, 12);
+            }
+
+            var previewIcon = new Bitmap(16, 16);
+            using (var g = Graphics.FromImage(previewIcon))
+            {
+                g.Clear(Color.Transparent);
+                g.FillRectangle(Brushes.Yellow, 2, 2, 12, 12);
+                g.DrawRectangle(Pens.Orange, 2, 2, 12, 12);
+            }
+
+            treeViewImageList.Images.Add("folder", folderIcon);
+            treeViewImageList.Images.Add("group", groupIcon);
+            treeViewImageList.Images.Add("preview", previewIcon);
+        }
+
+        // Method 2: Alternative - Load from embedded resource
+        private TreeNode CreateFolderTreeNodeWithCustomIcon(
+    (string FullPath, string FolderName, int Level, bool HasUniquePermissions,
+     List<(string GroupName, string GroupId, string Role)> Groups, bool HasChildren) folder,
+    Dictionary<string, List<(string FullPath, string FolderName, int Level,
+     bool HasUniquePermissions, List<(string GroupName, string GroupId, string Role)> Groups, bool HasChildren)>> foldersByParent)
+        {
+            if (string.IsNullOrEmpty(folder.FullPath))
+            {
+                System.Diagnostics.Debug.WriteLine($"CreateFolderTreeNodeWithCustomIcon: Skipping folder '{folder.FolderName}' with null or empty FullPath");
+                return null;
+            }
+
+            var groupCount = folder.Groups.Count;
+            var indent = new string(' ', folder.Level * 2);
+            var nodeText = folder.HasUniquePermissions
+                ? $"{indent}{folder.FolderName} (Unique, {groupCount} CSG group{(groupCount == 1 ? "" : "s")} assigned)"
+                : $"{indent}{folder.FolderName} (Inherited)";
+
+            var folderNode = new TreeNode
+            {
+                Text = nodeText,
+                ImageKey = "folder", // Use named key instead of index
+                SelectedImageKey = "folder",
+                Tag = new TreeNodeData
+                {
+                    IsSubfolder = true,
+                    SubfolderName = folder.FolderName,
+                    FullPath = folder.FullPath,
+                    Level = folder.Level,
+                    HasChildren = folder.HasChildren
+                }
+            };
+
+            foreach (var group in folder.Groups)
+            {
+                folderNode.Nodes.Add(new TreeNode
+                {
+                    Text = $"{group.GroupName}: {group.Role}",
+                    ImageKey = "group", // Use named key for group icon
+                    SelectedImageKey = "group",
+                    Tag = new TreeNodeData
+                    {
+                        IsSubfolder = false,
+                        GroupId = group.GroupId,
+                        GroupName = group.GroupName,
+                        Permission = group.Role,
+                        FullPath = folder.FullPath,
+                        Level = folder.Level
+                    }
+                });
+            }
+
+            // Add child folders if they exist
+            if (foldersByParent.ContainsKey(folder.FullPath))
+            {
+                foreach (var childFolder in foldersByParent[folder.FullPath].OrderBy(f => f.FolderName))
+                {
+                    var childNode = CreateFolderTreeNodeWithCustomIcon(childFolder, foldersByParent);
+                    if (childNode != null)
+                        folderNode.Nodes.Add(childNode);
+                }
+            }
+
+            return folderNode;
         }
         private void AddChildNodesRecursively(
             TreeNode parentNode,
@@ -527,22 +839,24 @@ namespace EntraGroupsApp
             {
                 if (isUpdatingTreeView || _subfolderCache == null) return;
 
+                // Capture current state
+                var (expandedPaths, selectedPath) = CaptureTreeViewState();
+
                 string query = txtSearch.Text.Trim().ToLower() == _placeholderText.ToLower() ? string.Empty : txtSearch.Text.Trim().ToLower();
                 string viewFilter = cmbView.SelectedItem?.ToString() ?? "All Subfolders";
-                tvSubfolders.Nodes.Clear();
 
-                var filteredCache = _subfolderCache
-                    .Where(s =>
-                        (viewFilter == "All Subfolders" ||
-                         (viewFilter == "Unique Permissions Only" && s.HasUniquePermissions) ||
-                         (viewFilter == "Inherited Permissions Only" && !s.HasUniquePermissions)) &&
-                        (string.IsNullOrWhiteSpace(query) || s.SubfolderName.ToLower().Contains(query) || s.Groups.Any(g => g.GroupName.ToLower().Contains(query))))
-                    .ToList();
-
-                PopulateTreeView(filteredCache, viewFilter);
+                if (string.IsNullOrWhiteSpace(query))
+                {
+                    // No search query - restore full view with state
+                    RestoreFullTreeViewWithState(viewFilter);
+                }
+                else
+                {
+                    // Search query active - apply filter with state preservation
+                    ApplySearchFilterWithStatePreservation(query, viewFilter, expandedPaths, selectedPath);
+                }
             });
         }
-
         private void PopulateTreeView(List<(string SubfolderName, bool HasUniquePermissions, List<(string GroupName, string GroupId, string Role)> Groups)> cache, string viewFilter)
         {
             isUpdatingTreeView = true;
@@ -606,39 +920,302 @@ namespace EntraGroupsApp
             }
         }
 
-
-        // Enhanced search functionality to work with nested folders
-        private void txtSearch_TextChanged(object sender, EventArgs e)
+        // Helper method to restore full TreeView while preserving state
+        private void RestoreFullTreeViewWithState(string viewFilter)
         {
-            UpdateUI(() =>
+            if (_subfolderCache == null) return;
+
+            // Capture current state
+            var (expandedPaths, selectedPath) = CaptureTreeViewState();
+
+            try
             {
-                if (isUpdatingTreeView || _subfolderCache == null) return;
+                isUpdatingTreeView = true;
 
-                string query = txtSearch.Text.Trim().ToLower();
-                string viewFilter = cmbView.SelectedItem?.ToString() ?? "All Subfolders";
-                tvSubfolders.Nodes.Clear();
-
-                if (query == _placeholderText.ToLower() || string.IsNullOrWhiteSpace(query))
-                {
-                    PopulateTreeView(_subfolderCache.Where(s =>
+                // Filter cache based on view filter only (no search filter)
+                var filteredCache = _subfolderCache
+                    .Where(s =>
                         viewFilter == "All Subfolders" ||
                         (viewFilter == "Unique Permissions Only" && s.HasUniquePermissions) ||
-                        (viewFilter == "Inherited Permissions Only" && !s.HasUniquePermissions)).ToList(), viewFilter);
-                    return;
+                        (viewFilter == "Inherited Permissions Only" && !s.HasUniquePermissions))
+                    .OrderBy(s => s.SubfolderName)
+                    .ToList();
+
+                // Rebuild TreeView with top-level subfolders
+                tvSubfolders.Nodes.Clear();
+                foreach (var subfolder in filteredCache)
+                {
+                    var subfolderNode = new TreeNode
+                    {
+                        Text = subfolder.HasUniquePermissions
+                            ? $"{subfolder.SubfolderName} (Unique, {subfolder.Groups.Count} CSG group{(subfolder.Groups.Count == 1 ? "" : "s")} assigned)"
+                            : $"{subfolder.SubfolderName} (Inherited)",
+                        ImageIndex = 0,
+                        SelectedImageIndex = 0,
+                        Tag = new TreeNodeData
+                        {
+                            IsSubfolder = true,
+                            SubfolderName = subfolder.SubfolderName,
+                            Level = 0,
+                            HasChildren = true // Assume top-level may have children
+                        }
+                    };
+
+                    foreach (var group in subfolder.Groups)
+                    {
+                        subfolderNode.Nodes.Add(new TreeNode
+                        {
+                            Text = $"{group.GroupName}: {group.Role}",
+                            ImageIndex = 1,
+                            SelectedImageIndex = 1,
+                            Tag = new TreeNodeData
+                            {
+                                IsSubfolder = false,
+                                GroupId = group.GroupId,
+                                GroupName = group.GroupName,
+                                Permission = group.Role
+                            }
+                        });
+                    }
+
+                    tvSubfolders.Nodes.Add(subfolderNode);
                 }
 
-                var filteredCache = _subfolderCache
+                // Add any loaded nested subfolders back to their parents
+                RestoreNestedSubfoldersToTree(expandedPaths);
+
+                // Restore expansion and selection state
+                RestoreTreeViewState(expandedPaths, selectedPath);
+
+                lblStatus.Text = $"Showing {filteredCache.Count} subfolders (search cleared).";
+            }
+            finally
+            {
+                isUpdatingTreeView = false;
+            }
+        }
+
+        private void RestoreNestedSubfoldersToTree(List<string> expandedPaths)
+        {
+            if (_nestedSubfolderCache == null || !_nestedSubfolderCache.Any()) return;
+
+            // Group nested folders by their parent paths
+            var foldersByParent = _nestedSubfolderCache
+                .GroupBy(f => GetParentPath(f.FullPath))
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderBy(f => f.FolderName).ToList()
+                );
+
+            // Add nested folders back to their parents
+            RestoreNestedFoldersRecursively(tvSubfolders.Nodes, foldersByParent, expandedPaths);
+        }
+
+        private void RestoreNestedFoldersRecursively(TreeNodeCollection parentNodes,
+    Dictionary<string, List<(string FullPath, string FolderName, int Level, bool HasUniquePermissions, List<(string GroupName, string GroupId, string Role)> Groups, bool HasChildren)>> foldersByParent,
+    List<string> expandedPaths)
+        {
+            foreach (TreeNode parentNode in parentNodes)
+            {
+                if (parentNode.Tag is TreeNodeData parentData && parentData.IsSubfolder)
+                {
+                    string parentPath = parentData.FullPath;
+                    if (!string.IsNullOrEmpty(parentPath) && foldersByParent.ContainsKey(parentPath))
+                    {
+                        // Only add children if this parent was previously expanded
+                        if (expandedPaths.Contains(parentPath))
+                        {
+                            foreach (var folder in foldersByParent[parentPath])
+                            {
+                                // Check if child already exists to avoid duplicates
+                                var existingChild = parentNode.Nodes.Cast<TreeNode>()
+                                    .FirstOrDefault(n => n.Tag is TreeNodeData childData &&
+                                                   childData.IsSubfolder &&
+                                                   childData.SubfolderName == folder.FolderName);
+
+                                if (existingChild == null)
+                                {
+                                    var childNode = CreateFolderTreeNode(folder, foldersByParent);
+                                    if (childNode != null)
+                                    {
+                                        childNode.BackColor = Color.LightYellow;
+                                        childNode.Text += " [Loaded]";
+                                        parentNode.Nodes.Add(childNode);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Recursively process children
+                    if (parentNode.Nodes.Count > 0)
+                    {
+                        RestoreNestedFoldersRecursively(parentNode.Nodes, foldersByParent, expandedPaths);
+                    }
+                }
+            }
+        }
+
+        private void ApplySearchFilterWithStatePreservation(string query, string viewFilter, List<string> expandedPaths, string selectedPath)
+        {
+            if (_subfolderCache == null) return;
+
+            try
+            {
+                isUpdatingTreeView = true;
+
+                // Filter top-level cache
+                var filteredTopLevel = _subfolderCache
                     .Where(s =>
                         (viewFilter == "All Subfolders" ||
                          (viewFilter == "Unique Permissions Only" && s.HasUniquePermissions) ||
                          (viewFilter == "Inherited Permissions Only" && !s.HasUniquePermissions)) &&
                         (s.SubfolderName.ToLower().Contains(query) || s.Groups.Any(g => g.GroupName.ToLower().Contains(query))))
+                    .OrderBy(s => s.SubfolderName)
                     .ToList();
 
-                PopulateTreeView(filteredCache, viewFilter);
-            });
+                // Filter nested cache
+                var filteredNested = _nestedSubfolderCache
+                    .Where(s =>
+                        (viewFilter == "All Subfolders" ||
+                         (viewFilter == "Unique Permissions Only" && s.HasUniquePermissions) ||
+                         (viewFilter == "Inherited Permissions Only" && !s.HasUniquePermissions)) &&
+                        (s.FolderName.ToLower().Contains(query) || s.Groups.Any(g => g.GroupName.ToLower().Contains(query))))
+                    .OrderBy(s => s.Level)
+                    .ThenBy(s => s.FolderName)
+                    .ToList();
+
+                tvSubfolders.Nodes.Clear();
+
+                // Add matching top-level folders
+                foreach (var subfolder in filteredTopLevel)
+                {
+                    var subfolderNode = new TreeNode
+                    {
+                        Text = subfolder.HasUniquePermissions
+                            ? $"{subfolder.SubfolderName} (Unique, {subfolder.Groups.Count} CSG group{(subfolder.Groups.Count == 1 ? "" : "s")} assigned)"
+                            : $"{subfolder.SubfolderName} (Inherited)",
+                        ImageIndex = 0,
+                        SelectedImageIndex = 0,
+                        Tag = new TreeNodeData
+                        {
+                            IsSubfolder = true,
+                            SubfolderName = subfolder.SubfolderName,
+                            Level = 0,
+                            HasChildren = true
+                        }
+                    };
+
+                    foreach (var group in subfolder.Groups)
+                    {
+                        subfolderNode.Nodes.Add(new TreeNode
+                        {
+                            Text = $"{group.GroupName}: {group.Role}",
+                            ImageIndex = 1,
+                            SelectedImageIndex = 1,
+                            Tag = new TreeNodeData
+                            {
+                                IsSubfolder = false,
+                                GroupId = group.GroupId,
+                                GroupName = group.GroupName,
+                                Permission = group.Role
+                            }
+                        });
+                    }
+
+                    tvSubfolders.Nodes.Add(subfolderNode);
+                }
+
+                // Add matching nested folders as flat list (since it's filtered results)
+                foreach (var folder in filteredNested)
+                {
+                    var folderNode = new TreeNode
+                    {
+                        Text = folder.HasUniquePermissions
+                            ? $"{folder.FolderName} (Level {folder.Level}, Unique, {folder.Groups.Count} CSG group{(folder.Groups.Count == 1 ? "" : "s")} assigned)"
+                            : $"{folder.FolderName} (Level {folder.Level}, Inherited)",
+                        ImageIndex = 0,
+                        SelectedImageIndex = 0,
+                        BackColor = Color.LightBlue, // Distinguish nested results
+                        Tag = new TreeNodeData
+                        {
+                            IsSubfolder = true,
+                            SubfolderName = folder.FolderName,
+                            FullPath = folder.FullPath,
+                            Level = folder.Level,
+                            HasChildren = folder.HasChildren
+                        }
+                    };
+
+                    foreach (var group in folder.Groups)
+                    {
+                        folderNode.Nodes.Add(new TreeNode
+                        {
+                            Text = $"{group.GroupName}: {group.Role}",
+                            ImageIndex = 1,
+                            SelectedImageIndex = 1,
+                            Tag = new TreeNodeData
+                            {
+                                IsSubfolder = false,
+                                GroupId = group.GroupId,
+                                GroupName = group.GroupName,
+                                Permission = group.Role,
+                                FullPath = folder.FullPath,
+                                Level = folder.Level
+                            }
+                        });
+                    }
+
+                    tvSubfolders.Nodes.Add(folderNode);
+                }
+
+                // Try to restore selection if the selected item matches the search
+                if (!string.IsNullOrEmpty(selectedPath))
+                {
+                    var nodeToSelect = FindNodeByPath(tvSubfolders.Nodes, selectedPath);
+                    if (nodeToSelect != null)
+                    {
+                        tvSubfolders.SelectedNode = nodeToSelect;
+                        nodeToSelect.EnsureVisible();
+                    }
+                }
+
+                var totalResults = filteredTopLevel.Count + filteredNested.Count;
+                lblStatus.Text = $"Found {totalResults} matches for '{query}' ({filteredTopLevel.Count} top-level, {filteredNested.Count} nested).";
+            }
+            finally
+            {
+                isUpdatingTreeView = false;
+            }
         }
 
+
+
+        // Enhanced search functionality to work with nested folders
+        private void txtSearch_TextChanged(object sender, EventArgs e)
+        {
+            // Don't process if we're updating the TreeView programmatically
+            if (isUpdatingTreeView) return;
+
+            UpdateUI(() =>
+            {
+                string query = txtSearch.Text.Trim().ToLower();
+                string viewFilter = cmbView.SelectedItem?.ToString() ?? "All Subfolders";
+
+                // If query is empty or placeholder, restore full view with preserved state
+                if (query == _placeholderText.ToLower() || string.IsNullOrWhiteSpace(query))
+                {
+                    RestoreFullTreeViewWithState(viewFilter);
+                    return;
+                }
+
+                // Capture current expansion state before filtering
+                var (expandedPaths, selectedPath) = CaptureTreeViewState();
+
+                // Filter and display results while preserving structure
+                ApplySearchFilterWithStatePreservation(query, viewFilter, expandedPaths, selectedPath);
+            });
+        }
         private TreeNode CloneTreeNode(TreeNode node)
         {
             var newNode = new TreeNode
@@ -672,19 +1249,54 @@ namespace EntraGroupsApp
             try
             {
                 UpdateUI(() => lblStatus.Text = "Loading groups...");
-                var groups = await _graphClient.Groups.GetAsync(requestConfiguration =>
-                {
-                    requestConfiguration.QueryParameters.Filter = "startswith(displayName, 'CSG-CLBA-MKTG') or startswith(displayName, 'CSG-CLBA-MGMT')";
-                    requestConfiguration.QueryParameters.Select = new[] { "id", "displayName" };
-                    requestConfiguration.QueryParameters.Top = 999;
-                    requestConfiguration.Headers.Add("ConsistencyLevel", "eventual");
-                });
 
-                _availableGroups = groups?.Value
-                    ?.Where(g => g.DisplayName != null && !g.DisplayName.Contains("Mays-Group", StringComparison.OrdinalIgnoreCase))
+                var allGroups = new List<GroupItem>();
+                string[] groupPrefixes = GetRelevantGroupPrefixes();
+
+                System.Diagnostics.Debug.WriteLine($"LoadAvailableGroupsAsync: Selected department: {_selectedDepartment}");
+                System.Diagnostics.Debug.WriteLine($"LoadAvailableGroupsAsync: Group prefixes: {string.Join(", ", groupPrefixes)}");
+
+                // Load groups for each relevant prefix
+                foreach (string prefix in groupPrefixes)
+                {
+                    try
+                    {
+                        System.Diagnostics.Debug.WriteLine($"LoadAvailableGroupsAsync: Loading groups for prefix: {prefix}");
+
+                        var groups = await _graphClient.Groups.GetAsync(requestConfiguration =>
+                        {
+                            // Use the dynamic prefix instead of hard-coded values
+                            requestConfiguration.QueryParameters.Filter = $"startswith(displayName, '{prefix}')";
+                            requestConfiguration.QueryParameters.Select = new[] { "id", "displayName" };
+                            requestConfiguration.QueryParameters.Top = 999;
+                            requestConfiguration.Headers.Add("ConsistencyLevel", "eventual");
+                        });
+
+                        var prefixGroups = groups?.Value
+                            ?.Where(g => g.DisplayName != null &&
+                                       !g.DisplayName.Contains("Mays-Group", StringComparison.OrdinalIgnoreCase) &&
+                                       !g.DisplayName.Contains("mays-group", StringComparison.OrdinalIgnoreCase))
+                            .OrderBy(g => g.DisplayName)
+                            .Select(g => new GroupItem { Id = g.Id, DisplayName = g.DisplayName })
+                            .ToList() ?? new List<GroupItem>();
+
+                        allGroups.AddRange(prefixGroups);
+                        System.Diagnostics.Debug.WriteLine($"LoadAvailableGroupsAsync: Found {prefixGroups.Count} groups for prefix {prefix}");
+                    }
+                    catch (Exception prefixEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"LoadAvailableGroupsAsync: Error loading groups for prefix {prefix}: {prefixEx.Message}");
+                        await _auditLogManager?.LogAction(_signedInUserId, null, "LoadGroupsError", _libraryName, null, "Subfolder",
+                            $"Failed to load groups for prefix {prefix}: {prefixEx.Message}");
+                    }
+                }
+
+                // Remove duplicates and sort
+                _availableGroups = allGroups
+                    .GroupBy(g => g.Id)
+                    .Select(g => g.First())
                     .OrderBy(g => g.DisplayName)
-                    .Select(g => new GroupItem { Id = g.Id, DisplayName = g.DisplayName })
-                    .ToList() ?? new List<GroupItem>();
+                    .ToList();
 
                 UpdateUI(() =>
                 {
@@ -695,12 +1307,14 @@ namespace EntraGroupsApp
                     if (_availableGroups.Any())
                     {
                         cmbGroups.SelectedIndex = 0;
+                        System.Diagnostics.Debug.WriteLine($"LoadAvailableGroupsAsync: Loaded {_availableGroups.Count} total groups");
                     }
                     else
                     {
-                        lblStatus.Text = "No groups found.";
+                        lblStatus.Text = $"No groups found for department {_selectedDepartment}.";
                         btnAdd.Enabled = false;
                         btnRemove.Enabled = false;
+                        System.Diagnostics.Debug.WriteLine($"LoadAvailableGroupsAsync: No groups found for department {_selectedDepartment}");
                     }
                     UpdateSidebar();
                 });
@@ -714,12 +1328,78 @@ namespace EntraGroupsApp
                     btnAdd.Enabled = false;
                     btnRemove.Enabled = false;
                 });
-                await _auditLogManager.LogAction(_signedInUserId, null, "LoadGroupsError", _libraryName, null, "Subfolder", $"Failed to load groups: {ex.Message}");
+                await _auditLogManager?.LogAction(_signedInUserId, null, "LoadGroupsError", _libraryName, null, "Subfolder",
+                    $"Failed to load groups: {ex.Message}");
             }
         }
+        // Recursive method to load nested subfolders
+        // Recursive method to load nested subfolders
 
-        // Recursive method to load nested subfolders
-        // Recursive method to load nested subfolders
+        // Helper method to get relevant group prefixes based on the selected department
+        private string[] GetRelevantGroupPrefixes()
+        {
+            // If we have department mappings and a selected department, use them
+            if (_departmentMappings != null && !string.IsNullOrEmpty(_selectedDepartment))
+            {
+                if (_departmentMappings.TryGetValue(_selectedDepartment, out var mapping))
+                {
+                    System.Diagnostics.Debug.WriteLine($"GetRelevantGroupPrefixes: Found mapping for {_selectedDepartment}: {string.Join(", ", mapping.GroupPrefixes)}");
+
+                    // Transform FSG prefixes to CSG prefixes for subfolder permissions
+                    var csgPrefixes = mapping.GroupPrefixes
+                        .Select(prefix => prefix.Replace("FSG-", "CSG-", StringComparison.OrdinalIgnoreCase))
+                        .ToArray();
+
+                    System.Diagnostics.Debug.WriteLine($"GetRelevantGroupPrefixes: Transformed to CSG prefixes: {string.Join(", ", csgPrefixes)}");
+                    return csgPrefixes;
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"GetRelevantGroupPrefixes: No mapping found for department {_selectedDepartment}");
+                }
+            }
+
+            // Fallback: try to determine from site URL or use broad prefixes
+            if (!string.IsNullOrEmpty(_siteUrl))
+            {
+                // Extract department from site URL patterns
+                var urlParts = _siteUrl.Split('/');
+                var teamSitePart = urlParts.LastOrDefault();
+
+                if (!string.IsNullOrEmpty(teamSitePart))
+                {
+                    // Map common URL patterns to CSG department prefixes (not FSG)
+                    var urlToDeptMapping = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+                {
+                    { "MKTGTeamSite", new[] { "CSG-CLBA-MKTG" } },
+                    { "MGMTTeamSite", new[] { "CSG-CLBA-MGMT" } },
+                    { "CIBSTeamSite", new[] { "CSG-CLBA-CIBS" } },
+                    { "FINCTeamSite", new[] { "CSG-CLBA-FINC" } },
+                    { "AccountingTeamSite", new[] { "CSG-CLBA-ACCT" } },
+                    { "BUSPTeamSite", new[] { "CSG-CLBA-BUSP" } },
+                    { "team-CEDTeamSite", new[] { "CSG-CLBA-CED" } },
+                    { "COMMTeamSite", new[] { "CSG-CLBA-COMM" } },
+                    { "DeansOfficeDrive", new[] { "CSG-CLBA-DEAN" } },
+                    { "INFOTeamSite", new[] { "CSG-CLBA-INFO" } },
+                    { "BizGradTeamSite", new[] { "CSG-CLBA-BizGrad" } },
+                    { "MediaTeamSite", new[] { "CSG-CLBA-Media" } },
+                    { "team-MaysStaffCouncil", new[] { "CSG-CLBA-MaysStaffCouncil" } }
+                };
+
+                    if (urlToDeptMapping.TryGetValue(teamSitePart, out var prefixes))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"GetRelevantGroupPrefixes: Determined CSG prefixes from URL {teamSitePart}: {string.Join(", ", prefixes)}");
+                        return prefixes;
+                    }
+                }
+            }
+
+            // Ultimate fallback: use broad CSG prefixes (this will load more groups but ensures we don't miss any)
+            var fallbackPrefixes = new[] { "CSG-CLBA-MKTG", "CSG-CLBA-MGMT" }; // You might want to expand this
+            System.Diagnostics.Debug.WriteLine($"GetRelevantGroupPrefixes: Using fallback CSG prefixes: {string.Join(", ", fallbackPrefixes)}");
+            return fallbackPrefixes;
+        }
+
         private async Task<List<Folder>> LoadNestedFoldersAsync(ClientContext context, Folder parentFolder, string webServerRelativeUrl, int currentLevel = 0)
         {
             var allFolders = new List<Folder>();
@@ -848,7 +1528,7 @@ namespace EntraGroupsApp
 
             return allFolders;
         }
-        private async Task LoadCurrentPermissionsAsync(string debugSessionId = null)
+        private async Task LoadCurrentPermissionsAsync(string debugSessionId = null, bool preserveTreeViewState = false)
         {
             debugSessionId = debugSessionId ?? Guid.NewGuid().ToString();
             if (DateTime.UtcNow - lastRefreshTime < minimumRefreshInterval && debugSessionId != null)
@@ -858,21 +1538,35 @@ namespace EntraGroupsApp
                 return;
             }
 
+            // Capture current state if preserving
+            var (expandedPaths, selectedPath) = preserveTreeViewState ? CaptureTreeViewState() : (new List<string>(), null);
+
             string selectedSubfolderName = null;
             var auditLogs = new List<(string Action, string GroupName, string Details)>();
-            _subfolderCache = new List<(string SubfolderName, bool HasUniquePermissions, List<(string GroupName, string GroupId, string Role)> Groups)>();
+
+            // Only reset cache if not preserving state (for full refresh)
+            if (!preserveTreeViewState)
+            {
+                _subfolderCache = new List<(string SubfolderName, bool HasUniquePermissions, List<(string GroupName, string GroupId, string Role)> Groups)>();
+            }
 
             UpdateUI(() =>
             {
                 try
                 {
                     isUpdatingTreeView = true;
-                    if (tvSubfolders != null && tvSubfolders.SelectedNode?.Tag is TreeNodeData nodeData && nodeData.IsSubfolder)
+                    if (tvSubfolders != null && tvSubfolders.SelectedNode?.Tag is TreeNodeData nodeData && nodeData.IsSubfolder && !preserveTreeViewState)
                     {
                         selectedSubfolderName = nodeData.SubfolderName;
                     }
-                    tvSubfolders?.Nodes.Clear();
-                    if (lblStatus != null) lblStatus.Text = "Loading subfolder permissions...";
+
+                    // Only clear tree if not preserving state
+                    if (!preserveTreeViewState)
+                    {
+                        tvSubfolders?.Nodes.Clear();
+                    }
+
+                    if (lblStatus != null) lblStatus.Text = preserveTreeViewState ? "Refreshing permissions..." : "Loading subfolder permissions...";
                     if (progressBar != null)
                     {
                         progressBar.Value = 0;
@@ -999,132 +1693,237 @@ namespace EntraGroupsApp
                     int processedSubfolders = 0;
                     int progressUpdateInterval = Math.Max(1, totalSubfolders / 20);
 
-                    foreach (var subfolder in subfolders)
+                    // Only rebuild TreeView if not preserving state
+                    if (!preserveTreeViewState)
                     {
-                        if (_cancellationTokenSource?.Token.IsCancellationRequested == true)
+                        foreach (var subfolder in subfolders)
                         {
-                            UpdateUI(() =>
-                            {
-                                if (lblStatus != null) lblStatus.Text = "Loading cancelled by user.";
-                                if (progressBar != null) progressBar.Visible = false;
-                                this.Cursor = Cursors.Default;
-                            });
-                            auditLogs.Add(("LoadCancelled", null, $"Loading cancelled by user, Session ID: {debugSessionId}"));
-                            await LogAuditBatchAsync(auditLogs);
-                            return;
-                        }
-
-                        try
-                        {
-                            if (string.IsNullOrEmpty(subfolder.Name))
-                            {
-                                System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Skipping subfolder with null or empty Name");
-                                auditLogs.Add(("InvalidSubfolderName", null, $"Subfolder with null or empty Name in library '{_libraryName}', Session ID: {debugSessionId}"));
-                                continue;
-                            }
-
-                            var groupList = new List<(string GroupName, string GroupId, string Role)>();
-                            bool hasUniquePermissions = subfolder.ListItemAllFields?.HasUniqueRoleAssignments ?? false;
-
-                            if (hasUniquePermissions && subfolder.ListItemAllFields?.RoleAssignments != null)
-                            {
-                                foreach (var ra in subfolder.ListItemAllFields.RoleAssignments)
-                                {
-                                    try
-                                    {
-                                        if (ra.Member?.Title?.StartsWith("CSG-", StringComparison.OrdinalIgnoreCase) == true)
-                                        {
-                                            var role = ra.RoleDefinitionBindings.FirstOrDefault()?.Name ?? "Unknown";
-                                            if (role == "Contribute") role = "Edit";
-                                            if (role != "Limited Access")
-                                            {
-                                                var groupId = ra.Member.LoginName?.Split('|').Last() ?? string.Empty;
-                                                groupList.Add((ra.Member.Title, groupId, role));
-                                            }
-                                        }
-                                    }
-                                    catch (Exception raEx)
-                                    {
-                                        auditLogs.Add(("ProcessSubfolderPermissionError", null,
-                                            $"Error processing role assignment for subfolder '{subfolder.Name}': {raEx.Message}, Session ID: {debugSessionId}"));
-                                    }
-                                }
-                            }
-
-                            // FIX: Properly construct the fullPath for top-level subfolders
-                            var fullPath = string.IsNullOrEmpty(subfolder.ServerRelativeUrl)
-                                ? $"{libraryPath}/{subfolder.Name}".Replace("//", "/")
-                                : subfolder.ServerRelativeUrl;
-
-                            if (string.IsNullOrEmpty(subfolder.ServerRelativeUrl))
-                            {
-                                auditLogs.Add(("NullServerRelativeUrl", null,
-                                    $"Subfolder '{subfolder.Name}' has null ServerRelativeUrl, using constructed path: {fullPath}, Session ID: {debugSessionId}"));
-                                System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Subfolder '{subfolder.Name}' has null ServerRelativeUrl, using constructed path: {fullPath}, HTTPS={_siteUrl}{fullPath}");
-                            }
-                            else if (!string.Equals(subfolder.ServerRelativeUrl, fullPath, StringComparison.OrdinalIgnoreCase))
-                            {
-                                auditLogs.Add(("PathMismatch", null,
-                                    $"Subfolder '{subfolder.Name}' ServerRelativeUrl ({subfolder.ServerRelativeUrl}) does not match constructed path ({fullPath}), Session ID: {debugSessionId}"));
-                            }
-
-                            _subfolderCache.Add((subfolder.Name, hasUniquePermissions, groupList));
-                            System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Added subfolder '{subfolder.Name}', FullPath={fullPath}, HasUniquePermissions={hasUniquePermissions}, Groups={groupList.Count}, HTTPS={_siteUrl}{fullPath}");
-
-                            // FIX: Create TreeNode with proper FullPath
-                            var node = new TreeNode
-                            {
-                                Text = hasUniquePermissions
-                                    ? $"{subfolder.Name} (Unique, {groupList.Count} CSG group{(groupList.Count == 1 ? "" : "s")} assigned)"
-                                    : $"{subfolder.Name} (Inherited)",
-                                ImageIndex = 0,
-                                SelectedImageIndex = 0,
-                                Tag = new TreeNodeData
-                                {
-                                    IsSubfolder = true,
-                                    SubfolderName = subfolder.Name,
-                                    FullPath = fullPath  // This is now properly set
-                                }
-                            };
-
-                            foreach (var group in groupList)
-                            {
-                                node.Nodes.Add(new TreeNode
-                                {
-                                    Text = $"{group.GroupName}: {group.Role}",
-                                    ImageIndex = 1,
-                                    SelectedImageIndex = 1,
-                                    Tag = new TreeNodeData
-                                    {
-                                        IsSubfolder = false,
-                                        GroupId = group.GroupId,
-                                        GroupName = group.GroupName,
-                                        Permission = group.Role,
-                                        FullPath = fullPath  // Also set FullPath for group nodes
-                                    }
-                                });
-                            }
-                            tvSubfolders.Nodes.Add(node);
-
-                            processedSubfolders++;
-                            if (processedSubfolders % progressUpdateInterval == 0 || processedSubfolders == totalSubfolders)
+                            if (_cancellationTokenSource?.Token.IsCancellationRequested == true)
                             {
                                 UpdateUI(() =>
                                 {
-                                    if (progressBar != null)
-                                        progressBar.Value = totalSubfolders > 0 ? (int)((processedSubfolders / (double)totalSubfolders) * 100) : 0;
+                                    if (lblStatus != null) lblStatus.Text = "Loading cancelled by user.";
+                                    if (progressBar != null) progressBar.Visible = false;
+                                    this.Cursor = Cursors.Default;
                                 });
+                                auditLogs.Add(("LoadCancelled", null, $"Loading cancelled by user, Session ID: {debugSessionId}"));
+                                await LogAuditBatchAsync(auditLogs);
+                                return;
+                            }
+
+                            try
+                            {
+                                if (string.IsNullOrEmpty(subfolder.Name))
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Skipping subfolder with null or empty Name");
+                                    auditLogs.Add(("InvalidSubfolderName", null, $"Subfolder with null or empty Name in library '{_libraryName}', Session ID: {debugSessionId}"));
+                                    continue;
+                                }
+
+                                var groupList = new List<(string GroupName, string GroupId, string Role)>();
+                                bool hasUniquePermissions = subfolder.ListItemAllFields?.HasUniqueRoleAssignments ?? false;
+
+                                if (hasUniquePermissions && subfolder.ListItemAllFields?.RoleAssignments != null)
+                                {
+                                    foreach (var ra in subfolder.ListItemAllFields.RoleAssignments)
+                                    {
+                                        try
+                                        {
+                                            if (ra.Member?.Title?.StartsWith("CSG-", StringComparison.OrdinalIgnoreCase) == true)
+                                            {
+                                                var role = ra.RoleDefinitionBindings.FirstOrDefault()?.Name ?? "Unknown";
+                                                if (role == "Contribute") role = "Edit";
+                                                if (role != "Limited Access")
+                                                {
+                                                    var groupId = ra.Member.LoginName?.Split('|').Last() ?? string.Empty;
+                                                    groupList.Add((ra.Member.Title, groupId, role));
+                                                }
+                                            }
+                                        }
+                                        catch (Exception raEx)
+                                        {
+                                            auditLogs.Add(("ProcessSubfolderPermissionError", null,
+                                                $"Error processing role assignment for subfolder '{subfolder.Name}': {raEx.Message}, Session ID: {debugSessionId}"));
+                                        }
+                                    }
+                                }
+
+                                // Properly construct the fullPath for top-level subfolders
+                                var fullPath = string.IsNullOrEmpty(subfolder.ServerRelativeUrl)
+                                    ? $"{libraryPath}/{subfolder.Name}".Replace("//", "/")
+                                    : subfolder.ServerRelativeUrl;
+
+                                if (string.IsNullOrEmpty(subfolder.ServerRelativeUrl))
+                                {
+                                    auditLogs.Add(("NullServerRelativeUrl", null,
+                                        $"Subfolder '{subfolder.Name}' has null ServerRelativeUrl, using constructed path: {fullPath}, Session ID: {debugSessionId}"));
+                                    System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Subfolder '{subfolder.Name}' has null ServerRelativeUrl, using constructed path: {fullPath}, HTTPS={_siteUrl}{fullPath}");
+                                }
+                                else if (!string.Equals(subfolder.ServerRelativeUrl, fullPath, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    auditLogs.Add(("PathMismatch", null,
+                                        $"Subfolder '{subfolder.Name}' ServerRelativeUrl ({subfolder.ServerRelativeUrl}) does not match constructed path ({fullPath}), Session ID: {debugSessionId}"));
+                                }
+
+                                _subfolderCache.Add((subfolder.Name, hasUniquePermissions, groupList));
+                                System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Added subfolder '{subfolder.Name}', FullPath={fullPath}, HasUniquePermissions={hasUniquePermissions}, Groups={groupList.Count}, HTTPS={_siteUrl}{fullPath}");
+
+                                // Prepare node data for UI thread (FIXED: Create data structure to pass to UI thread)
+                                var nodeData = new
+                                {
+                                    SubfolderName = subfolder.Name,
+                                    FullPath = fullPath,
+                                    HasUniquePermissions = hasUniquePermissions,
+                                    GroupList = groupList.ToList(), // Create a copy for thread safety
+                                    HasChildren = subfolder.Folders?.Count(f => !f.Name.StartsWith("Forms")) > 0
+                                };
+
+                                // Create TreeNode on UI thread (FIXED: All TreeNode operations moved to UI thread)
+                                UpdateUI(() =>
+                                {
+                                    try
+                                    {
+                                        var node = new TreeNode
+                                        {
+                                            Text = nodeData.HasUniquePermissions
+                                                ? $"{nodeData.SubfolderName} (Unique, {nodeData.GroupList.Count} CSG group{(nodeData.GroupList.Count == 1 ? "" : "s")} assigned)"
+                                                : $"{nodeData.SubfolderName} (Inherited)",
+                                            ImageKey = "folder", // Use custom folder icon
+                                            SelectedImageKey = "folder",
+                                            Tag = new TreeNodeData
+                                            {
+                                                IsSubfolder = true,
+                                                SubfolderName = nodeData.SubfolderName,
+                                                FullPath = nodeData.FullPath,
+                                                Level = 0, // Top-level subfolders are level 0
+                                                HasChildren = nodeData.HasChildren
+                                            }
+                                        };
+
+                                        foreach (var group in nodeData.GroupList)
+                                        {
+                                            node.Nodes.Add(new TreeNode
+                                            {
+                                                Text = $"{group.GroupName}: {group.Role}",
+                                                ImageKey = "group", // Use custom group icon
+                                                SelectedImageKey = "group",
+                                                Tag = new TreeNodeData
+                                                {
+                                                    IsSubfolder = false,
+                                                    GroupId = group.GroupId,
+                                                    GroupName = group.GroupName,
+                                                    Permission = group.Role,
+                                                    FullPath = nodeData.FullPath,
+                                                    Level = 0
+                                                }
+                                            });
+                                        }
+
+                                        // Add node to TreeView (this must be on UI thread)
+                                        if (tvSubfolders != null && !tvSubfolders.IsDisposed)
+                                        {
+                                            tvSubfolders.Nodes.Add(node);
+                                            System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Successfully added TreeNode for '{nodeData.SubfolderName}' on UI thread");
+                                        }
+                                    }
+                                    catch (Exception nodeEx)
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Error creating TreeNode for '{nodeData.SubfolderName}': {nodeEx.Message}");
+                                        auditLogs.Add(("CreateTreeNodeError", null, $"Error creating TreeNode for '{nodeData.SubfolderName}': {nodeEx.Message}, Session ID: {debugSessionId}"));
+                                    }
+                                });
+
+                                processedSubfolders++;
+
+                                // Update progress (FIXED: Capture values before UI thread call)
+                                var currentProgress = processedSubfolders;
+                                var totalProgress = totalSubfolders;
+
+                                if (currentProgress % progressUpdateInterval == 0 || currentProgress == totalProgress)
+                                {
+                                    UpdateUI(() =>
+                                    {
+                                        try
+                                        {
+                                            if (progressBar != null && !progressBar.IsDisposed)
+                                            {
+                                                var progressValue = totalProgress > 0 ?
+                                                    Math.Min(100, (int)((currentProgress / (double)totalProgress) * 100)) : 0;
+                                                progressBar.Value = progressValue;
+                                            }
+                                        }
+                                        catch (Exception progEx)
+                                        {
+                                            System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Error updating progress: {progEx.Message}");
+                                        }
+                                    });
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                auditLogs.Add(("ProcessSubfolderError", null,
+                                    $"Error processing subfolder '{subfolder.Name}': {ex.Message}, Session ID: {debugSessionId}"));
+                                System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Error processing subfolder '{subfolder.Name}': {ex.Message}");
                             }
                         }
-                        catch (Exception ex)
+
+                        System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Added {subfolders.Count} top-level subfolders to _subfolderCache");
+                    }
+                    else
+                    {
+                        // When preserving state, just update the cache but don't rebuild TreeView
+                        foreach (var subfolder in subfolders)
                         {
-                            auditLogs.Add(("ProcessSubfolderError", null,
-                                $"Error processing subfolder '{subfolder.Name}': {ex.Message}, Session ID: {debugSessionId}"));
-                            System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Error processing subfolder '{subfolder.Name}': {ex.Message}");
+                            try
+                            {
+                                if (string.IsNullOrEmpty(subfolder.Name)) continue;
+
+                                var groupList = new List<(string GroupName, string GroupId, string Role)>();
+                                bool hasUniquePermissions = subfolder.ListItemAllFields?.HasUniqueRoleAssignments ?? false;
+
+                                if (hasUniquePermissions && subfolder.ListItemAllFields?.RoleAssignments != null)
+                                {
+                                    foreach (var ra in subfolder.ListItemAllFields.RoleAssignments)
+                                    {
+                                        try
+                                        {
+                                            if (ra.Member?.Title?.StartsWith("CSG-", StringComparison.OrdinalIgnoreCase) == true)
+                                            {
+                                                var role = ra.RoleDefinitionBindings.FirstOrDefault()?.Name ?? "Unknown";
+                                                if (role == "Contribute") role = "Edit";
+                                                if (role != "Limited Access")
+                                                {
+                                                    var groupId = ra.Member.LoginName?.Split('|').Last() ?? string.Empty;
+                                                    groupList.Add((ra.Member.Title, groupId, role));
+                                                }
+                                            }
+                                        }
+                                        catch (Exception raEx)
+                                        {
+                                            auditLogs.Add(("ProcessSubfolderPermissionError", null,
+                                                $"Error processing role assignment for subfolder '{subfolder.Name}': {raEx.Message}, Session ID: {debugSessionId}"));
+                                        }
+                                    }
+                                }
+
+                                // Update cache entry
+                                var cacheIndex = _subfolderCache.FindIndex(s => string.Equals(s.SubfolderName, subfolder.Name, StringComparison.OrdinalIgnoreCase));
+                                if (cacheIndex >= 0)
+                                {
+                                    _subfolderCache[cacheIndex] = (subfolder.Name, hasUniquePermissions, groupList);
+                                }
+                                else
+                                {
+                                    _subfolderCache.Add((subfolder.Name, hasUniquePermissions, groupList));
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                auditLogs.Add(("ProcessSubfolderError", null,
+                                    $"Error processing subfolder '{subfolder.Name}': {ex.Message}, Session ID: {debugSessionId}"));
+                            }
                         }
                     }
-
-                    System.Diagnostics.Debug.WriteLine($"LoadCurrentPermissionsAsync: Added {subfolders.Count} top-level subfolders to _subfolderCache");
 
                     UpdateUI(() =>
                     {
@@ -1137,7 +1936,12 @@ namespace EntraGroupsApp
                         }
                         UpdateSidebar();
 
-                        if (!string.IsNullOrEmpty(selectedSubfolderName) && tvSubfolders != null)
+                        // Restore state if preserving, otherwise use original logic
+                        if (preserveTreeViewState && expandedPaths.Any())
+                        {
+                            RestoreTreeViewState(expandedPaths, selectedPath);
+                        }
+                        else if (!string.IsNullOrEmpty(selectedSubfolderName) && tvSubfolders != null)
                         {
                             var nodeToSelect = tvSubfolders.Nodes.Cast<TreeNode>().FirstOrDefault(n => (n.Tag as TreeNodeData)?.SubfolderName == selectedSubfolderName);
                             if (nodeToSelect != null)
@@ -1147,8 +1951,11 @@ namespace EntraGroupsApp
                             }
                         }
 
-                        // NEW: Ensure TreeView visibility
-                        EnsureTreeViewVisibility();
+                        // Ensure TreeView visibility only for fresh loads
+                        if (!preserveTreeViewState)
+                        {
+                            EnsureTreeViewVisibility();
+                        }
 
                         isUpdatingTreeView = false;
                         this.Cursor = Cursors.Default;
@@ -1280,16 +2087,19 @@ namespace EntraGroupsApp
                         return;
                     }
 
-                    string subfolderName = null; // Declare at method scope
+                    string subfolderName = null;
                     bool hasUniquePermissions = false;
                     string targetPath = null;
                     bool hasChildren = false;
-                    var currentGroupSelection = cmbGroups.SelectedItem; // Define currentGroupSelection
+                    int currentLevel = 0;
+                    var currentGroupSelection = cmbGroups.SelectedItem;
 
                     if (nodeData.IsSubfolder)
                     {
                         subfolderName = nodeData.SubfolderName;
                         targetPath = nodeData.FullPath;
+                        currentLevel = nodeData.Level;
+                        hasChildren = nodeData.HasChildren;
                         ShowFolderBreadcrumb(tvSubfolders.SelectedNode);
                     }
                     else
@@ -1298,15 +2108,28 @@ namespace EntraGroupsApp
                         var subfolderData = subfolderNode?.Tag as TreeNodeData;
                         subfolderName = subfolderData?.SubfolderName;
                         targetPath = subfolderData?.FullPath;
+                        currentLevel = subfolderData?.Level ?? 0;
+                        hasChildren = subfolderData?.HasChildren ?? false;
                         ShowFolderBreadcrumb(subfolderNode);
                     }
 
-                    // Null-safe cache lookup
+                    // Check cache for this specific path and level
                     bool isNested = !string.IsNullOrEmpty(targetPath) && _nestedSubfolderCache.Any(s => string.Equals(s.FullPath, targetPath, StringComparison.OrdinalIgnoreCase));
                     var cacheEntryNested = isNested ? _nestedSubfolderCache.FirstOrDefault(s => string.Equals(s.FullPath, targetPath, StringComparison.OrdinalIgnoreCase)) : default;
                     var cacheEntryTop = !isNested && subfolderName != null ? _subfolderCache.FirstOrDefault(s => string.Equals(s.SubfolderName, subfolderName, StringComparison.OrdinalIgnoreCase)) : default;
                     hasUniquePermissions = isNested ? (!string.IsNullOrEmpty(cacheEntryNested.FullPath) && cacheEntryNested.HasUniquePermissions) : (!string.IsNullOrEmpty(cacheEntryTop.SubfolderName) && cacheEntryTop.HasUniquePermissions);
-                    hasChildren = isNested ? cacheEntryNested.HasChildren : true; // Assume top-level may have children
+
+                    // Enhanced logic for hasChildren - check if we can go deeper
+                    if (isNested)
+                    {
+                        hasChildren = cacheEntryNested.HasChildren ||
+                                     (currentLevel < _maxNestingLevel &&
+                                      !_nestedSubfolderCache.Any(s => s.FullPath.StartsWith(targetPath + "/") && s.Level == currentLevel + 1));
+                    }
+                    else
+                    {
+                        hasChildren = true; // Assume top-level may have children, or check if already loaded
+                    }
 
                     if (nodeData.IsSubfolder)
                     {
@@ -1319,9 +2142,23 @@ namespace EntraGroupsApp
                         btnAdd.Enabled = hasUniquePermissions;
                         btnRemove.Enabled = hasUniquePermissions && hasPreview;
                         btnPreview.Enabled = hasUniquePermissions && !hasPreview && cmbGroups.SelectedItem != null;
-                        btnViewSubfolders.Enabled = hasChildren;
-                        cmbGroups.Enabled = hasUniquePermissions && !hasPreview;
 
+                        // Enhanced: Enable "View Subfolders" for any level within the limit
+                        btnViewSubfolders.Enabled = hasChildren && currentLevel < _maxNestingLevel;
+                        if (btnViewSubfolders.Enabled)
+                        {
+                            btnViewSubfolders.Text = currentLevel == 0 ? "View Subfolders" : $"Load Level {currentLevel + 1} Folders";
+                        }
+                        else if (currentLevel >= _maxNestingLevel)
+                        {
+                            btnViewSubfolders.Text = $"Max Depth ({_maxNestingLevel}) Reached";
+                        }
+                        else
+                        {
+                            btnViewSubfolders.Text = "No Subfolders";
+                        }
+
+                        cmbGroups.Enabled = hasUniquePermissions && !hasPreview;
                         radioRead.Enabled = hasUniquePermissions;
                         radioEdit.Enabled = hasUniquePermissions;
                         radioNoAccess.Enabled = false;
@@ -1357,6 +2194,7 @@ namespace EntraGroupsApp
                             btnRemove.Enabled = hasUniquePermissions;
                             btnPreview.Enabled = false;
                             btnViewSubfolders.Enabled = false;
+                            btnViewSubfolders.Text = "View Subfolders";
                             cmbGroups.Enabled = false;
 
                             radioRead.Enabled = hasUniquePermissions;
@@ -1377,6 +2215,7 @@ namespace EntraGroupsApp
                             btnRemove.Enabled = hasUniquePermissions;
                             btnPreview.Enabled = false;
                             btnViewSubfolders.Enabled = false;
+                            btnViewSubfolders.Text = "View Subfolders";
                             cmbGroups.Enabled = false;
 
                             radioRead.Enabled = hasUniquePermissions;
@@ -1401,6 +2240,122 @@ namespace EntraGroupsApp
                     isUpdatingTreeView = false;
                 }
             });
+        }
+
+        private string NormalizePath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return string.Empty;
+
+            // Remove duplicate slashes and normalize
+            var normalized = path.Replace("//", "/");
+
+            // Split into segments and remove duplicates
+            var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var uniqueSegments = new List<string>();
+
+            for (int i = 0; i < segments.Length; i++)
+            {
+                var segment = segments[i];
+
+                // Skip duplicate consecutive segments (like /teams/DeansOfficeDrive/teams/DeansOfficeDrive/)
+                if (uniqueSegments.Count == 0 || !string.Equals(uniqueSegments.Last(), segment, StringComparison.OrdinalIgnoreCase))
+                {
+                    uniqueSegments.Add(segment);
+                }
+                // Special case: if we see the same site pattern twice in a row, remove the duplicate
+                else if (i > 0 && i < segments.Length - 1)
+                {
+                    // Check if this might be a duplicated site path (teams/sitename pattern)
+                    if (uniqueSegments.Count >= 2 &&
+                        string.Equals(uniqueSegments[uniqueSegments.Count - 2], "teams", StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(segment, "teams", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // This looks like a duplicate teams/sitename pattern, skip it
+                        System.Diagnostics.Debug.WriteLine($"Skipping duplicate segment: {segment}");
+                        continue;
+                    }
+                    uniqueSegments.Add(segment);
+                }
+            }
+
+            var result = "/" + string.Join("/", uniqueSegments);
+            System.Diagnostics.Debug.WriteLine($"NormalizePath: '{path}' -> '{result}'");
+            return result;
+        }
+        private string ConstructSubfolderPath(TreeNode node, string webServerRelativeUrl, string libraryName)
+        {
+            if (node?.Tag is not TreeNodeData nodeData || !nodeData.IsSubfolder)
+                return null;
+
+            // If we already have a valid FullPath, use it (but normalize it first)
+            if (!string.IsNullOrEmpty(nodeData.FullPath))
+            {
+                var normalized = CleanDuplicateSitePath(NormalizePath(nodeData.FullPath), _siteUrl);
+                System.Diagnostics.Debug.WriteLine($"Using existing FullPath: {normalized}");
+                return normalized;
+            }
+
+            // Build path by walking up the tree
+            var pathParts = new List<string>();
+            var currentNode = node;
+
+            while (currentNode != null && currentNode.Tag is TreeNodeData currentData && currentData.IsSubfolder)
+            {
+                pathParts.Insert(0, currentData.SubfolderName);
+                currentNode = currentNode.Parent;
+            }
+
+            // Construct the full path - FIXED: Ensure webServerRelativeUrl doesn't already contain site path
+            string librarySlug = libraryName.Replace(" ", "");
+
+            // Remove any duplicate site path components from webServerRelativeUrl
+            string cleanWebPath = webServerRelativeUrl.TrimEnd('/');
+
+            string fullPath = $"{cleanWebPath}/{librarySlug}/{string.Join("/", pathParts)}";
+            var normalizedPath = CleanDuplicateSitePath(NormalizePath(fullPath), _siteUrl);
+
+            System.Diagnostics.Debug.WriteLine($"Constructed path from tree walk: {normalizedPath}");
+
+            // Update the node's FullPath for future use
+            nodeData.FullPath = normalizedPath;
+
+            return normalizedPath;
+        }
+
+        private bool IsValidSharePointPath(string path, string expectedSiteUrl)
+        {
+            if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(expectedSiteUrl))
+                return false;
+
+            try
+            {
+                // Check for duplicate segments in the path
+                var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                var segmentCounts = segments.GroupBy(s => s, StringComparer.OrdinalIgnoreCase)
+                                          .Where(g => g.Count() > 1)
+                                          .ToList();
+
+                if (segmentCounts.Any())
+                {
+                    System.Diagnostics.Debug.WriteLine($"Found duplicate segments in path {path}: {string.Join(", ", segmentCounts.Select(g => g.Key))}");
+                    return false;
+                }
+
+                // Ensure the path starts with the expected site structure
+                var expectedStart = new Uri(expectedSiteUrl).AbsolutePath.TrimEnd('/');
+                if (!path.StartsWith(expectedStart, StringComparison.OrdinalIgnoreCase))
+                {
+                    System.Diagnostics.Debug.WriteLine($"Path {path} doesn't start with expected site path {expectedStart}");
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error validating path {path}: {ex.Message}");
+                return false;
+            }
         }
         private void radioPermission_CheckedChanged(object sender, EventArgs e)
         {
@@ -2474,46 +3429,42 @@ namespace EntraGroupsApp
                 UpdateUI(() => { isUpdatingTreeView = true; btnRemove.Enabled = true; isUpdatingTreeView = false; });
             }
         }
+
+        private bool IsNestedSubfolderSelected()
+        {
+            if (tvSubfolders?.SelectedNode?.Tag is TreeNodeData nodeData && nodeData.IsSubfolder)
+            {
+                return nodeData.Level > 0; // Level 0 is top-level, > 0 is nested
+            }
+            return false;
+        }
         private async void btnBreakInheritance_Click(object sender, EventArgs e)
         {
             string subfolderName = null;
             string debugSessionId = Guid.NewGuid().ToString();
+            TreeNodeData nodeData = null;
             UpdateUI(() => { isUpdatingTreeView = true; btnBreakInheritance.Enabled = false; isUpdatingTreeView = false; });
 
             try
             {
-                if (tvSubfolders.SelectedNode == null || !(tvSubfolders.SelectedNode.Tag is TreeNodeData nodeData) || !nodeData.IsSubfolder)
+                if (tvSubfolders.SelectedNode == null || !(tvSubfolders.SelectedNode.Tag is TreeNodeData selectedNodeData) || !selectedNodeData.IsSubfolder)
                 {
                     UpdateUI(() => { MessageBox.Show("Please select a subfolder.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information); lblStatus.Text = "Break inheritance cancelled: Invalid subfolder selection."; });
                     await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceError", _libraryName, null, "Subfolder", $"Invalid subfolder selection, Session ID: {debugSessionId}");
                     return;
                 }
 
+                nodeData = selectedNodeData;
                 subfolderName = nodeData.SubfolderName;
-                bool isNested = _nestedSubfolderCache.Any(s => s.FolderName == subfolderName);
-                var cacheEntryNested = default((string FullPath, string FolderName, int Level, bool HasUniquePermissions, List<(string GroupName, string GroupId, string Role)> Groups, bool HasChildren));
-                var cacheEntryTop = default((string SubfolderName, bool HasUniquePermissions, List<(string GroupName, string GroupId, string Role)> Groups));
-                bool hasUniquePermissions;
-                if (isNested)
-                {
-                    cacheEntryNested = _nestedSubfolderCache.FirstOrDefault(s => string.Equals(s.FolderName, subfolderName, StringComparison.OrdinalIgnoreCase));
-                    hasUniquePermissions = !string.IsNullOrEmpty(cacheEntryNested.FullPath) && cacheEntryNested.HasUniquePermissions;
-                }
-                else
-                {
-                    cacheEntryTop = _subfolderCache.FirstOrDefault(s => string.Equals(s.SubfolderName, subfolderName, StringComparison.OrdinalIgnoreCase));
-                    hasUniquePermissions = !string.IsNullOrEmpty(cacheEntryTop.SubfolderName) && cacheEntryTop.HasUniquePermissions;
-                }
-                if (isNested)
-                {
-                    var cacheEntry = _nestedSubfolderCache.FirstOrDefault(s => string.Equals(s.FolderName, subfolderName, StringComparison.OrdinalIgnoreCase));
-                    hasUniquePermissions = cacheEntry.FullPath != null && cacheEntry.HasUniquePermissions;
-                }
-                else
-                {
-                    var cacheEntry = _subfolderCache.FirstOrDefault(s => string.Equals(s.SubfolderName, subfolderName, StringComparison.OrdinalIgnoreCase));
-                    hasUniquePermissions = cacheEntry.SubfolderName != null && cacheEntry.HasUniquePermissions;
-                }
+                int subfolderLevel = nodeData.Level;
+                string subfolderPath = nodeData.FullPath;
+
+                // Check current permissions state
+                bool isNested = !string.IsNullOrEmpty(subfolderPath) && _nestedSubfolderCache.Any(s => string.Equals(s.FullPath, subfolderPath, StringComparison.OrdinalIgnoreCase));
+                var cacheEntryNested = isNested ? _nestedSubfolderCache.FirstOrDefault(s => string.Equals(s.FullPath, subfolderPath, StringComparison.OrdinalIgnoreCase)) : default;
+                var cacheEntryTop = !isNested && subfolderName != null ? _subfolderCache.FirstOrDefault(s => string.Equals(s.SubfolderName, subfolderName, StringComparison.OrdinalIgnoreCase)) : default;
+                bool hasUniquePermissions = isNested ? (!string.IsNullOrEmpty(cacheEntryNested.FullPath) && cacheEntryNested.HasUniquePermissions) : (!string.IsNullOrEmpty(cacheEntryTop.SubfolderName) && cacheEntryTop.HasUniquePermissions);
+
                 if (hasUniquePermissions)
                 {
                     UpdateUI(() => { MessageBox.Show("Subfolder already has unique permissions.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information); lblStatus.Text = "Break inheritance cancelled: Subfolder already has unique permissions."; });
@@ -2533,23 +3484,40 @@ namespace EntraGroupsApp
 
                 var scopes = new[] { "https://tamucs.sharepoint.com/.default" };
                 var accounts = await _pca.GetAccountsAsync();
-                var authResult = await _pca.AcquireTokenSilent(scopes, accounts.FirstOrDefault()).ExecuteAsync();
+                var account = accounts.FirstOrDefault();
+                if (account == null)
+                {
+                    UpdateUI(() => { MessageBox.Show("No signed-in account found. Please sign in again.", "Authentication Error", MessageBoxButtons.OK, MessageBoxIcon.Warning); lblStatus.Text = "Error: No signed-in account."; });
+                    await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceError", _libraryName, null, "Subfolder", $"No signed-in account found, Session ID: {debugSessionId}");
+                    return;
+                }
+
+                var authResult = await _pca.AcquireTokenSilent(scopes, account).ExecuteAsync();
                 const int maxRetries = 3;
                 int retryCount = 0;
                 bool success = false;
                 string subfolderRelativeUrl = null;
 
-                // Cache webServerRelativeUrl before entering the using block
-                string webServerRelativeUrl;
-                using (var tempContext = new ClientContext(_siteUrl))
+                // Construct or use existing full path
+                if (string.IsNullOrEmpty(subfolderPath))
                 {
-                    tempContext.ExecutingWebRequest += (s, e) => { e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken; };
-                    tempContext.Load(tempContext.Web, w => w.ServerRelativeUrl);
-                    await tempContext.ExecuteQueryAsync();
-                    webServerRelativeUrl = tempContext.Web.ServerRelativeUrl;
+                    // Fallback: construct path for top-level subfolders
+                    using (var tempContext = new ClientContext(_siteUrl))
+                    {
+                        tempContext.ExecutingWebRequest += (s, e) => { e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken; };
+                        tempContext.Load(tempContext.Web, w => w.ServerRelativeUrl);
+                        await tempContext.ExecuteQueryAsync();
+                        string webServerRelativeUrl = tempContext.Web.ServerRelativeUrl;
+                        string librarySlug = _libraryName.Replace(" ", "");
+                        subfolderRelativeUrl = $"{webServerRelativeUrl.TrimEnd('/')}/{librarySlug}/{subfolderName}".Replace("//", "/");
+                    }
+                }
+                else
+                {
+                    subfolderRelativeUrl = subfolderPath;
                 }
 
-                subfolderRelativeUrl = isNested ? cacheEntryNested.FullPath : $"{webServerRelativeUrl.TrimEnd('/')}/{_libraryName}/{subfolderName}".Replace("//", "/");
+                System.Diagnostics.Debug.WriteLine($"btnBreakInheritance_Click: Breaking inheritance for '{subfolderName}' at path '{subfolderRelativeUrl}', Level={subfolderLevel}, HTTPS={_siteUrl}{subfolderRelativeUrl}");
 
                 while (retryCount < maxRetries && !success)
                 {
@@ -2576,32 +3544,58 @@ namespace EntraGroupsApp
                             if (!listItem.HasUniqueRoleAssignments)
                                 throw new Exception("Failed to break inheritance: Subfolder still has inherited permissions.");
 
+                            // Update cache based on whether it's nested or top-level
                             UpdateUI(() =>
                             {
                                 isUpdatingTreeView = true;
                                 if (isNested)
                                 {
-                                    var cacheIndex = _nestedSubfolderCache.FindIndex(s => string.Equals(s.FolderName, subfolderName, StringComparison.OrdinalIgnoreCase));
+                                    var cacheIndex = _nestedSubfolderCache.FindIndex(s => string.Equals(s.FullPath, subfolderRelativeUrl, StringComparison.OrdinalIgnoreCase));
                                     if (cacheIndex >= 0)
-                                        _nestedSubfolderCache[cacheIndex] = (_nestedSubfolderCache[cacheIndex].FullPath, subfolderName, _nestedSubfolderCache[cacheIndex].Level, true, _nestedSubfolderCache[cacheIndex].Groups, _nestedSubfolderCache[cacheIndex].HasChildren);
+                                    {
+                                        var existing = _nestedSubfolderCache[cacheIndex];
+                                        _nestedSubfolderCache[cacheIndex] = (existing.FullPath, existing.FolderName, existing.Level, true, existing.Groups, existing.HasChildren);
+                                    }
                                 }
                                 else
                                 {
                                     var cacheIndex = _subfolderCache.FindIndex(s => string.Equals(s.SubfolderName, subfolderName, StringComparison.OrdinalIgnoreCase));
                                     if (cacheIndex >= 0)
-                                        _subfolderCache[cacheIndex] = (subfolderName, true, _subfolderCache[cacheIndex].Groups);
+                                    {
+                                        var existing = _subfolderCache[cacheIndex];
+                                        _subfolderCache[cacheIndex] = (existing.SubfolderName, true, existing.Groups);
+                                    }
                                 }
+
+                                // Update the TreeView node text to reflect unique permissions
+                                if (tvSubfolders.SelectedNode != null)
+                                {
+                                    var currentGroupCount = isNested ? cacheEntryNested.Groups?.Count ?? 0 : cacheEntryTop.Groups?.Count ?? 0;
+                                    tvSubfolders.SelectedNode.Text = $"{subfolderName} (Unique, {currentGroupCount} CSG group{(currentGroupCount == 1 ? "" : "s")} assigned)";
+                                }
+
                                 lblStatus.Text = $"Broke permission inheritance for '{subfolderName}'.";
                                 UpdateSidebar();
                                 isUpdatingTreeView = false;
                             });
 
                             await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritance", _libraryName, null, "Subfolder",
-                                $"Broke permission inheritance for subfolder '{subfolderName}', Session ID: {debugSessionId}");
+                                $"Broke permission inheritance for subfolder '{subfolderName}' at level {subfolderLevel}, Path: {subfolderRelativeUrl}, Session ID: {debugSessionId}");
                             success = true;
 
-                            lastRefreshTime = DateTime.MinValue;
-                            await LoadCurrentPermissionsAsync(debugSessionId);
+                            // Enhanced: Use targeted refresh for nested operations, full refresh for top-level
+                            bool isNestedOperation = subfolderLevel > 0;
+                            if (isNestedOperation)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"btnBreakInheritance_Click: Using targeted refresh for nested subfolder at level {subfolderLevel}");
+                                await RefreshSpecificSubfolderPermissions(subfolderRelativeUrl);
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine($"btnBreakInheritance_Click: Using full refresh for top-level subfolder");
+                                lastRefreshTime = DateTime.MinValue;
+                                await LoadCurrentPermissionsAsync(debugSessionId);
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -2610,7 +3604,7 @@ namespace EntraGroupsApp
                         if (retryCount < maxRetries)
                         {
                             await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceRetry", _libraryName, null, "Subfolder",
-                                $"Retry {retryCount} for breaking inheritance on '{subfolderName}': {ex.Message}, Inner: {(ex.InnerException?.Message ?? "None")}, Session ID: {debugSessionId}");
+                                $"Retry {retryCount} for breaking inheritance on '{subfolderName}' at level {subfolderLevel}: {ex.Message}, Inner: {(ex.InnerException?.Message ?? "None")}, Session ID: {debugSessionId}");
                             await Task.Delay(1000 * retryCount);
                             continue;
                         }
@@ -2624,7 +3618,7 @@ namespace EntraGroupsApp
                             isUpdatingTreeView = false;
                         });
                         await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceError", _libraryName, null, "Subfolder",
-                            $"Failed to break inheritance for subfolder '{subfolderName}' at '{subfolderRelativeUrl}': {ex.Message}, Inner: {(ex.InnerException?.Message ?? "None")}, StackTrace: {ex.StackTrace}, Session ID: {debugSessionId}");
+                            $"Failed to break inheritance for subfolder '{subfolderName}' at level {subfolderLevel}, Path: {subfolderRelativeUrl}: {ex.Message}, Inner: {(ex.InnerException?.Message ?? "None")}, StackTrace: {ex.StackTrace}, Session ID: {debugSessionId}");
                     }
                 }
             }
@@ -2639,11 +3633,121 @@ namespace EntraGroupsApp
                     isUpdatingTreeView = false;
                 });
                 await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceError", _libraryName, null, "Subfolder",
-                    $"Failed to break inheritance for subfolder '{subfolderName ?? "unknown"}': {ex.Message}, Inner: {(ex.InnerException?.Message ?? "None")}, Session ID: {debugSessionId}");
+                    $"Failed to break inheritance for subfolder '{subfolderName ?? "unknown"}' at level {nodeData?.Level ?? -1}: {ex.Message}, Inner: {(ex.InnerException?.Message ?? "None")}, Session ID: {debugSessionId}");
             }
             finally
             {
                 UpdateUI(() => { isUpdatingTreeView = true; btnBreakInheritance.Enabled = true; isUpdatingTreeView = false; });
+            }
+        }
+        private async Task RefreshSpecificSubfolderPermissions(string subfolderPath)
+        {
+            if (string.IsNullOrEmpty(subfolderPath)) return;
+
+            try
+            {
+                var scopes = new[] { "https://tamucs.sharepoint.com/.default" };
+                var accounts = await _pca.GetAccountsAsync();
+                var account = accounts.FirstOrDefault();
+                if (account == null) return;
+
+                var authResult = await _pca.AcquireTokenSilent(scopes, account).ExecuteAsync();
+
+                using (var context = new ClientContext(_siteUrl))
+                {
+                    context.ExecutingWebRequest += (s, e) => { e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken; };
+
+                    var subfolder = context.Web.GetFolderByServerRelativeUrl(subfolderPath);
+                    context.Load(subfolder, f => f.Name, f => f.ServerRelativeUrl, f => f.ListItemAllFields.HasUniqueRoleAssignments,
+                        f => f.ListItemAllFields.RoleAssignments.Include(
+                            ra => ra.Member.Title,
+                            ra => ra.Member.LoginName,
+                            ra => ra.RoleDefinitionBindings));
+                    await context.ExecuteQueryAsync();
+
+                    var groupList = new List<(string GroupName, string GroupId, string Role)>();
+                    bool hasUniquePermissions = subfolder.ListItemAllFields?.HasUniqueRoleAssignments ?? false;
+
+                    if (hasUniquePermissions && subfolder.ListItemAllFields?.RoleAssignments != null)
+                    {
+                        foreach (var ra in subfolder.ListItemAllFields.RoleAssignments)
+                        {
+                            try
+                            {
+                                if (ra.Member?.Title?.StartsWith("CSG-", StringComparison.OrdinalIgnoreCase) == true)
+                                {
+                                    var role = ra.RoleDefinitionBindings.FirstOrDefault()?.Name ?? "Unknown";
+                                    if (role == "Contribute") role = "Edit";
+                                    if (role != "Limited Access")
+                                    {
+                                        var groupId = ra.Member.LoginName?.Split('|').Last() ?? string.Empty;
+                                        groupList.Add((ra.Member.Title, groupId, role));
+                                    }
+                                }
+                            }
+                            catch (Exception raEx)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"RefreshSpecificSubfolderPermissions: Error processing role assignment: {raEx.Message}");
+                            }
+                        }
+                    }
+
+                    // Update cache
+                    var cacheIndex = _nestedSubfolderCache.FindIndex(s => string.Equals(s.FullPath, subfolderPath, StringComparison.OrdinalIgnoreCase));
+                    if (cacheIndex >= 0)
+                    {
+                        var existing = _nestedSubfolderCache[cacheIndex];
+                        _nestedSubfolderCache[cacheIndex] = (existing.FullPath, existing.FolderName, existing.Level, hasUniquePermissions, groupList, existing.HasChildren);
+                    }
+
+                    // Update TreeView node
+                    UpdateUI(() =>
+                    {
+                        var node = FindNodeByPath(tvSubfolders.Nodes, subfolderPath);
+                        if (node != null)
+                        {
+                            // Update folder node text
+                            if (node.Tag is TreeNodeData nodeData && nodeData.IsSubfolder)
+                            {
+                                node.Text = hasUniquePermissions
+                                    ? $"{nodeData.SubfolderName} (Unique, {groupList.Count} CSG group{(groupList.Count == 1 ? "" : "s")} assigned)"
+                                    : $"{nodeData.SubfolderName} (Inherited)";
+
+                                // Clear and rebuild group nodes
+                                var groupNodes = node.Nodes.Cast<TreeNode>().Where(n => (n.Tag as TreeNodeData)?.IsSubfolder == false).ToList();
+                                foreach (var groupNode in groupNodes)
+                                {
+                                    node.Nodes.Remove(groupNode);
+                                }
+
+                                foreach (var group in groupList)
+                                {
+                                    node.Nodes.Add(new TreeNode
+                                    {
+                                        Text = $"{group.GroupName}: {group.Role}",
+                                        ImageIndex = 1,
+                                        SelectedImageIndex = 1,
+                                        Tag = new TreeNodeData
+                                        {
+                                            IsSubfolder = false,
+                                            GroupId = group.GroupId,
+                                            GroupName = group.GroupName,
+                                            Permission = group.Role,
+                                            FullPath = subfolderPath,
+                                            Level = nodeData.Level
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        UpdateSidebar();
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"RefreshSpecificSubfolderPermissions: Error: {ex.Message}");
+                UpdateUI(() => lblStatus.Text = $"Error refreshing permissions: {ex.Message}");
             }
         }
         private async void btnRestoreInheritance_Click(object sender, EventArgs e)
@@ -3158,17 +4262,59 @@ namespace EntraGroupsApp
         }
         private void tvSubfolders_BeforeSelect(object sender, TreeViewCancelEventArgs e)
         {
-            if (_isPreviewActive && !IsDescendantOrSelf(e.Node, _previewSubfolderNode))
+            // Don't interfere with selection if we're programmatically updating the TreeView
+            if (isUpdatingTreeView)
             {
-                e.Cancel = true;
-                UpdateUI(() =>
+                return;
+            }
+
+            // Check if there's an active preview and if we're selecting outside the preview context
+            if (_isPreviewActive && _previewSubfolderNode != null)
+            {
+                // Allow selection within the same subfolder (preview node and its parent)
+                bool isSelectingWithinPreviewContext = false;
+
+                if (e.Node != null)
                 {
-                    lblStatus.Text = "Finish or cancel the current preview before selecting another subfolder.";
-                    MessageBox.Show("Please confirm or cancel the current preview before selecting another subfolder.", "Preview Active", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                });
+                    // Check if selecting the preview subfolder node itself
+                    if (e.Node == _previewSubfolderNode)
+                    {
+                        isSelectingWithinPreviewContext = true;
+                    }
+                    // Check if selecting a child of the preview subfolder (including the preview node)
+                    else if (e.Node.Parent == _previewSubfolderNode)
+                    {
+                        isSelectingWithinPreviewContext = true;
+                    }
+                    // Check if selecting the preview node itself
+                    else if (e.Node.Tag is TreeNodeData nodeData && nodeData.IsPreview)
+                    {
+                        isSelectingWithinPreviewContext = true;
+                    }
+                }
+
+                // Only block selection if we're going outside the preview context
+                if (!isSelectingWithinPreviewContext)
+                {
+                    e.Cancel = true;
+
+                    // Use a single, controlled message box that won't respawn
+                    if (!this.Focused) this.Focus(); // Ensure dialog has focus
+
+                    UpdateUI(() =>
+                    {
+                        lblStatus.Text = "Finish or cancel the current preview before selecting another subfolder.";
+                    });
+
+                    // Don't show popup if we're already showing one
+                    var result = MessageBox.Show(this,
+                        "Please confirm or cancel the current preview before selecting another subfolder.",
+                        "Preview Active",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
             }
         }
-
         // Enhanced context menu with nested folder support
         private void tvSubfolders_NodeMouseClick(object sender, TreeNodeMouseClickEventArgs e)
         {
@@ -3230,64 +4376,26 @@ namespace EntraGroupsApp
 
             string parentName = nodeData.SubfolderName;
             string parentRelativePath = nodeData.FullPath;
+            int parentLevel = nodeData.Level;
             TreeNode parentNode = tvSubfolders.SelectedNode;
             string debugSessionId = Guid.NewGuid().ToString();
 
-            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: parentName={parentName}, parentRelativePath={parentRelativePath ?? "NULL"}, HTTPS={_siteUrl}{parentRelativePath ?? "NULL"}");
+            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Starting - parentName={parentName}, parentLevel={parentLevel}, parentRelativePath={parentRelativePath ?? "NULL"}");
 
-            // Fix: Check if FullPath is null or empty and construct it
-            if (string.IsNullOrEmpty(parentRelativePath))
+            // Check if we've reached the maximum nesting level
+            if (parentLevel >= _maxNestingLevel)
             {
-                try
+                UpdateUI(() =>
                 {
-                    var scopes = new[] { "https://tamucs.sharepoint.com/.default" };
-                    var accounts = await _pca.GetAccountsAsync();
-                    var account = accounts.FirstOrDefault();
-                    if (account == null)
-                    {
-                        UpdateUI(() =>
-                        {
-                            MessageBox.Show("No signed-in account found. Please sign in again.", "Authentication Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                            lblStatus.Text = "Error: No signed-in account.";
-                        });
-                        return;
-                    }
-                    var authResult = await _pca.AcquireTokenSilent(scopes, account).ExecuteAsync();
-
-                    using (var tempContext = new ClientContext(_siteUrl))
-                    {
-                        tempContext.ExecutingWebRequest += (s, e) => { e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken; };
-                        tempContext.Load(tempContext.Web, w => w.ServerRelativeUrl);
-                        await tempContext.ExecuteQueryAsync();
-
-                        string webServerRelativeUrl = tempContext.Web.ServerRelativeUrl;
-                        string librarySlug = _libraryName.Replace(" ", "");
-
-                        // Construct the parent path
-                        parentRelativePath = $"{webServerRelativeUrl.TrimEnd('/')}/{librarySlug}/{parentName}".Replace("//", "/");
-
-                        System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Constructed parentRelativePath={parentRelativePath}, HTTPS={_siteUrl}{parentRelativePath}");
-
-                        // Update the nodeData for future use
-                        nodeData.FullPath = parentRelativePath;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    UpdateUI(() =>
-                    {
-                        MessageBox.Show($"Error constructing subfolder path: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        lblStatus.Text = "Error constructing subfolder path.";
-                        btnViewSubfolders.Enabled = true;
-                        this.Cursor = Cursors.Default;
-                    });
-                    return;
-                }
+                    MessageBox.Show($"Maximum nesting depth ({_maxNestingLevel}) reached. Cannot load deeper levels.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    lblStatus.Text = $"Maximum nesting depth ({_maxNestingLevel}) reached.";
+                });
+                return;
             }
 
             UpdateUI(() =>
             {
-                lblStatus.Text = $"Loading subfolders for '{parentName}'...";
+                lblStatus.Text = $"Loading level {parentLevel + 1} subfolders for '{parentName}'...";
                 btnViewSubfolders.Enabled = false;
                 this.Cursor = Cursors.WaitCursor;
             });
@@ -3308,7 +4416,6 @@ namespace EntraGroupsApp
                     });
                     await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersError", _libraryName, null, "Subfolder",
                         $"No signed-in account found, Session ID: {debugSessionId}");
-                    System.Diagnostics.Debug.WriteLine("btnViewSubfolders_Click: No signed-in account found");
                     return;
                 }
                 var authResult = await _pca.AcquireTokenSilent(scopes, account).ExecuteAsync();
@@ -3320,16 +4427,67 @@ namespace EntraGroupsApp
                     await context.ExecuteQueryAsync();
                     string webServerRelativeUrl = context.Web.ServerRelativeUrl;
 
-                    string librarySlug = _libraryName.Replace(" ", "");
-                    string libraryPath = $"{webServerRelativeUrl.TrimEnd('/')}/{librarySlug}".Replace("//", "/");
+                    // FIXED: Use improved path construction and validation
+                    if (string.IsNullOrEmpty(parentRelativePath))
+                    {
+                        parentRelativePath = ConstructSubfolderPath(parentNode, webServerRelativeUrl, _libraryName);
+                        System.Diagnostics.Debug.WriteLine($"Constructed parentRelativePath: {parentRelativePath}");
 
-                    System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: libraryName={_libraryName}, librarySlug={librarySlug}, libraryPath={libraryPath}, parentRelativePath={parentRelativePath}, HTTPS={_siteUrl}{parentRelativePath}");
+                        // Update the nodeData for future use
+                        if (!string.IsNullOrEmpty(parentRelativePath))
+                        {
+                            nodeData.FullPath = parentRelativePath;
+                        }
+                    }
+                    else
+                    {
+                        // Normalize existing path to remove any duplicates
+                        parentRelativePath = NormalizePath(parentRelativePath);
+                        System.Diagnostics.Debug.WriteLine($"Normalized existing parentRelativePath: {parentRelativePath}");
+                    }
+
+                    // Validate the path before using it
+                    if (string.IsNullOrEmpty(parentRelativePath) || !IsValidSharePointPath(parentRelativePath, _siteUrl))
+                    {
+                        UpdateUI(() =>
+                        {
+                            MessageBox.Show($"Invalid subfolder path detected: {parentRelativePath ?? "null"}. Please refresh and try again.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            lblStatus.Text = "Invalid subfolder path detected.";
+                            btnViewSubfolders.Enabled = true;
+                            this.Cursor = Cursors.Default;
+                        });
+                        await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersError", _libraryName, null, "Subfolder",
+                            $"Invalid subfolder path: {parentRelativePath ?? "null"}, Session ID: {debugSessionId}");
+                        return;
+                    }
+
+                    // Check if we've already loaded children for this parent
+                    bool alreadyLoaded = _nestedSubfolderCache.Any(s =>
+                        s.FullPath.StartsWith(parentRelativePath + "/", StringComparison.OrdinalIgnoreCase) &&
+                        s.Level == parentLevel + 1);
+
+                    if (alreadyLoaded && parentNode.Nodes.Count > 0)
+                    {
+                        UpdateUI(() =>
+                        {
+                            MessageBox.Show($"Subfolders for '{parentName}' are already loaded.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            lblStatus.Text = $"Subfolders for '{parentName}' are already loaded.";
+                            btnViewSubfolders.Enabled = true;
+                            this.Cursor = Cursors.Default;
+                        });
+                        return;
+                    }
+
+                    string librarySlug = _libraryName.Replace(" ", "");
+                    string libraryPath = NormalizePath($"{webServerRelativeUrl}/{librarySlug}");
+
+                    System.Diagnostics.Debug.WriteLine($"Using paths - libraryPath: {libraryPath}, parentRelativePath: {parentRelativePath}");
 
                     var parentFolder = context.Web.GetFolderByServerRelativeUrl(parentRelativePath);
                     context.Load(parentFolder, f => f.Exists, f => f.Name, f => f.ServerRelativeUrl, f => f.Folders);
                     await context.ExecuteQueryAsync();
 
-                    System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Folder Exists={parentFolder.Exists}, ServerRelativeUrl={parentFolder.ServerRelativeUrl ?? "null"}, HTTPS={_siteUrl}{parentFolder.ServerRelativeUrl ?? "null"}");
+                    System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Folder Exists={parentFolder.Exists}, ServerRelativeUrl={parentFolder.ServerRelativeUrl ?? "null"}");
 
                     if (!parentFolder.Exists || string.IsNullOrEmpty(parentFolder.ServerRelativeUrl))
                     {
@@ -3345,41 +4503,46 @@ namespace EntraGroupsApp
                         return;
                     }
 
-                    context.Load(parentFolder, f => f.Folders.Include(
-                        sf => sf.Name,
-                        sf => sf.ServerRelativeUrl,
-                        sf => sf.ListItemAllFields.HasUniqueRoleAssignments,
-                        sf => sf.ListItemAllFields.RoleAssignments.Include(
+                    // Load direct subfolders only (not recursive)
+                    context.Load(parentFolder.Folders, folders => folders.Include(
+                        f => f.Name,
+                        f => f.ServerRelativeUrl,
+                        f => f.ListItemAllFields.HasUniqueRoleAssignments,
+                        f => f.ListItemAllFields.RoleAssignments.Include(
                             ra => ra.Member.Title,
                             ra => ra.Member.LoginName,
                             ra => ra.RoleDefinitionBindings),
-                        sf => sf.Folders));
+                        f => f.Folders));
                     await context.ExecuteQueryAsync();
 
-                    var subfolders = parentFolder.Folders?.Where(f => !f.Name.StartsWith("Forms")).ToList() ?? new List<Folder>();
-                    System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Found {subfolders.Count} subfolders for parent {parentRelativePath}, HTTPS={_siteUrl}{parentRelativePath}");
+                    var directSubfolders = parentFolder.Folders?.Where(f => !f.Name.StartsWith("Forms")).ToList() ?? new List<Folder>();
 
-                    if (!subfolders.Any())
+                    System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Found {directSubfolders.Count} direct subfolders in {parentRelativePath}");
+
+                    if (!directSubfolders.Any())
                     {
                         UpdateUI(() =>
                         {
-                            MessageBox.Show($"No subfolders found in '{parentName}'.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            MessageBox.Show($"No subfolders found in '{parentName}' at level {parentLevel + 1}.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
                             lblStatus.Text = "No subfolders found.";
                             btnViewSubfolders.Enabled = true;
                             this.Cursor = Cursors.Default;
                         });
                         await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersNoSubfolders", _libraryName, null, "Subfolder",
-                            $"No subfolders found in '{parentName}', Session ID: {debugSessionId}");
+                            $"No subfolders found in '{parentName}' at level {parentLevel + 1}, Session ID: {debugSessionId}");
                         return;
                     }
 
-                    // Remove existing nested subfolders for this parent from cache
-                    _nestedSubfolderCache.RemoveAll(s => s.FullPath.StartsWith(parentRelativePath + "/"));
+                    // Remove existing cached entries for this parent's children to avoid duplicates
+                    _nestedSubfolderCache.RemoveAll(s =>
+                        s.FullPath.StartsWith(parentRelativePath + "/", StringComparison.OrdinalIgnoreCase) &&
+                        s.Level == parentLevel + 1);
 
-                    // Calculate parent level based on library path
-                    int parentLevel = parentRelativePath.Split('/').Length - libraryPath.Split('/').Length;
+                    var processedSubfolders = new List<(string FullPath, string FolderName, int Level, bool HasUniquePermissions,
+                        List<(string GroupName, string GroupId, string Role)> Groups, bool HasChildren)>();
 
-                    foreach (var subfolder in subfolders)
+                    // Process each direct subfolder
+                    foreach (var subfolder in directSubfolders)
                     {
                         if (string.IsNullOrEmpty(subfolder.Name))
                         {
@@ -3387,20 +4550,41 @@ namespace EntraGroupsApp
                             continue;
                         }
 
-                        var fullPath = string.IsNullOrEmpty(subfolder.ServerRelativeUrl)
-                            ? $"{parentRelativePath}/{subfolder.Name}".Replace("//", "/")
-                            : subfolder.ServerRelativeUrl;
-                        if (string.IsNullOrEmpty(subfolder.ServerRelativeUrl))
-                        {
-                            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Subfolder '{subfolder.Name}' has null ServerRelativeUrl, using constructed path: {fullPath}, HTTPS={_siteUrl}{fullPath}");
-                        }
-
+                        var fullPath = NormalizePath(subfolder.ServerRelativeUrl);
                         var folderName = subfolder.Name;
                         var level = parentLevel + 1;
                         bool hasChildren = subfolder.Folders?.Count(f => !f.Name.StartsWith("Forms")) > 0;
                         var groupList = new List<(string GroupName, string GroupId, string Role)>();
                         bool hasUniquePermissions = subfolder.ListItemAllFields?.HasUniqueRoleAssignments ?? false;
 
+                        // Validate the child path
+                        if (!IsValidSharePointPath(fullPath, _siteUrl))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Skipping invalid child path: {fullPath}");
+                            await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersInvalidChildPath", _libraryName, null, "Subfolder",
+                                $"Invalid child path detected: {fullPath}, Session ID: {debugSessionId}");
+                            continue;
+                        }
+
+                        // Verify this is actually a direct child
+                        var normalizedParentPath = NormalizePath(parentRelativePath);
+                        if (!fullPath.StartsWith(normalizedParentPath + "/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Path {fullPath} is not a child of {normalizedParentPath}");
+                            continue;
+                        }
+
+                        var relativePart = fullPath.Substring(normalizedParentPath.Length + 1);
+                        var pathSegments = relativePart.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+                        // Only process direct children (exactly 1 additional path segment)
+                        if (pathSegments.Length != 1)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Skipping non-direct child: {fullPath} (segments: {pathSegments.Length})");
+                            continue;
+                        }
+
+                        // Process permissions
                         if (hasUniquePermissions && subfolder.ListItemAllFields?.RoleAssignments != null)
                         {
                             foreach (var ra in subfolder.ListItemAllFields.RoleAssignments)
@@ -3426,54 +4610,63 @@ namespace EntraGroupsApp
                             }
                         }
 
-                        var existingIndex = _nestedSubfolderCache.FindIndex(s => string.Equals(s.FullPath, fullPath, StringComparison.OrdinalIgnoreCase));
-                        if (existingIndex >= 0)
-                        {
-                            _nestedSubfolderCache[existingIndex] = (fullPath, folderName, level, hasUniquePermissions, groupList, hasChildren);
-                        }
-                        else
-                        {
-                            _nestedSubfolderCache.Add((fullPath, folderName, level, hasUniquePermissions, groupList, hasChildren));
-                        }
+                        var folderData = (fullPath, folderName, level, hasUniquePermissions, groupList, hasChildren);
+                        processedSubfolders.Add(folderData);
+                        _nestedSubfolderCache.Add(folderData);
 
-                        System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Added subfolder to cache: FullPath={fullPath}, FolderName={folderName}, HTTPS={_siteUrl}{fullPath}, Level={level}");
+                        System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Added level {level} subfolder to cache: FullPath={fullPath}, FolderName={folderName}");
                     }
 
+                    if (!processedSubfolders.Any())
+                    {
+                        UpdateUI(() =>
+                        {
+                            MessageBox.Show($"No valid subfolders found in '{parentName}' at level {parentLevel + 1}.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            lblStatus.Text = "No valid subfolders found.";
+                            btnViewSubfolders.Enabled = true;
+                            this.Cursor = Cursors.Default;
+                        });
+                        return;
+                    }
+
+                    // Update UI with the loaded subfolders
                     UpdateUI(() =>
                     {
                         isUpdatingTreeView = true;
+
+                        // Clear existing child nodes that might be placeholders
                         parentNode.Nodes.Clear();
-                        foreach (var folder in _nestedSubfolderCache.Where(f => f.FullPath.StartsWith(parentRelativePath + "/") && f.Level == parentLevel + 1).OrderBy(f => f.FolderName))
+
+                        // Create a dictionary for potential nested children (for future expansion)
+                        var foldersByParent = _nestedSubfolderCache
+                            .Where(f => f.Level > parentLevel + 1)
+                            .GroupBy(f => GetParentPath(f.FullPath))
+                            .ToDictionary(
+                                g => g.Key,
+                                g => g.Select(f => (f.FullPath, f.FolderName, f.Level, f.HasUniquePermissions, f.Groups, f.HasChildren)).ToList()
+                            );
+
+                        // Add new child nodes
+                        foreach (var folder in processedSubfolders.OrderBy(f => f.FolderName))
                         {
-                            var node = new TreeNode
+                            var node = CreateFolderTreeNode(folder, foldersByParent);
+                            if (node != null)
                             {
-                                Text = folder.HasUniquePermissions
-                                    ? $"{folder.FolderName} (Unique, {folder.Groups.Count} CSG group{(folder.Groups.Count == 1 ? "" : "s")} assigned)"
-                                    : $"{folder.FolderName} (Inherited)",
-                                ImageIndex = 0,
-                                SelectedImageIndex = 0,
-                                Tag = new TreeNodeData { IsSubfolder = true, SubfolderName = folder.FolderName, FullPath = folder.FullPath, Level = folder.Level, HasChildren = folder.HasChildren }
-                            };
-                            foreach (var group in folder.Groups)
-                            {
-                                node.Nodes.Add(new TreeNode
-                                {
-                                    Text = $"{group.GroupName}: {group.Role}",
-                                    ImageIndex = 1,
-                                    SelectedImageIndex = 1,
-                                    Tag = new TreeNodeData { IsSubfolder = false, GroupId = group.GroupId, GroupName = group.GroupName, Permission = group.Role, FullPath = folder.FullPath, Level = folder.Level }
-                                });
+                                node.BackColor = Color.LightYellow;
+                                node.Text += " [Loaded]";
+                                parentNode.Nodes.Add(node);
                             }
-                            node.BackColor = Color.LightYellow;
-                            node.Text += " [Loaded]";
-                            parentNode.Nodes.Add(node);
                         }
+
                         parentNode.Expand();
-                        lblStatus.Text = $"Loaded {_nestedSubfolderCache.Count(f => f.FullPath.StartsWith(parentRelativePath + "/") && f.Level == parentLevel + 1)} subfolders for '{parentName}'.";
+                        lblStatus.Text = $"Loaded {processedSubfolders.Count} level {parentLevel + 1} subfolders for '{parentName}'.";
                         isUpdatingTreeView = false;
                         btnViewSubfolders.Enabled = true;
                         this.Cursor = Cursors.Default;
                     });
+
+                    await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersSuccess", _libraryName, null, "Subfolder",
+                        $"Successfully loaded {processedSubfolders.Count} subfolders for '{parentName}' at level {parentLevel + 1}, Session ID: {debugSessionId}");
                 }
             }
             catch (Exception ex)
@@ -3489,6 +4682,33 @@ namespace EntraGroupsApp
                     $"Error loading subfolders for '{parentName}': {ex.Message}, StackTrace: {ex.StackTrace}, Session ID: {debugSessionId}");
                 System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Error: {ex.Message}, StackTrace: {ex.StackTrace}");
             }
+        }
+
+        private string CleanDuplicateSitePath(string path, string siteUrl)
+        {
+            if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(siteUrl))
+                return path;
+
+            try
+            {
+                var siteUri = new Uri(siteUrl);
+                var sitePath = siteUri.AbsolutePath.TrimEnd('/');
+
+                // If the path contains the site path twice, remove the duplicate
+                var duplicatedSitePath = sitePath + sitePath;
+                if (path.Contains(duplicatedSitePath))
+                {
+                    var cleaned = path.Replace(duplicatedSitePath, sitePath);
+                    System.Diagnostics.Debug.WriteLine($"CleanDuplicateSitePath: Removed duplicate site path: '{path}' -> '{cleaned}'");
+                    return cleaned;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"CleanDuplicateSitePath: Error cleaning path: {ex.Message}");
+            }
+
+            return path;
         }
         private async Task<Microsoft.SharePoint.Client.Web> GetWebContextAsync()
         {
@@ -3581,5 +4801,6 @@ namespace EntraGroupsApp
                 });
             }
         }
+
     }
 }
