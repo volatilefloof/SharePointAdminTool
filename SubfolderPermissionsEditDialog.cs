@@ -4459,73 +4459,90 @@ namespace EntraGroupsApp
 
 
         // Helper method to validate a path with %20 fallback
-        private async Task<string> ValidatePathWithFallback(string path)
+        // Helper method to validate a path with %20 fallback
+private async Task<string> ValidatePathWithFallback(string path)
+{
+    try
+    {
+        var scopes = new[] { "https://tamucs.sharepoint.com/.default" };
+        var accounts = await _pca.GetAccountsAsync();
+        var account = accounts.FirstOrDefault();
+        if (account == null)
         {
-            try
-            {
-                var scopes = new[] { "https://tamucs.sharepoint.com/.default" };
-                var accounts = await _pca.GetAccountsAsync();
-                var account = accounts.FirstOrDefault();
-                if (account == null)
-                {
-                    System.Diagnostics.Debug.WriteLine("ValidatePathWithFallback: No account available for validation");
-                    return path; // Return original path if can't validate
-                }
-
-                var authResult = await _pca.AcquireTokenSilent(scopes, account).ExecuteAsync();
-
-                using (var context = new ClientContext(_siteUrl))
-                {
-                    context.ExecutingWebRequest += (s, e) => { e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken; };
-
-                    // Try original path first
-                    string[] pathsToTry = {
-                path, // Original path
-                ConstructProperlyEncodedPath(path) // Properly URL-encoded version
-            };
-
-                    for (int i = 0; i < pathsToTry.Length; i++)
-                    {
-                        try
-                        {
-                            string currentPath = pathsToTry[i];
-                            System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: Attempting validation of path {i + 1}/{pathsToTry.Length}: {currentPath}");
-
-                            var folder = context.Web.GetFolderByServerRelativeUrl(currentPath);
-                            context.Load(folder, f => f.Exists);
-                            await context.ExecuteQueryAsync();
-
-                            if (folder.Exists)
-                            {
-                                if (i > 0)
-                                {
-                                    System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: SUCCESS using properly URL-encoded fallback: {currentPath}");
-                                    System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: Original path that failed: {path}");
-                                }
-                                else
-                                {
-                                    System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: SUCCESS with original path: {currentPath}");
-                                }
-                                return currentPath;
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: Path validation failed for {pathsToTry[i]}: {ex.Message}");
-                            continue; // Try next path
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: Validation error: {ex.Message}");
-            }
-
-            System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: All validation attempts failed, returning original path: {path}");
-            return path; // Return original if all attempts fail
+            System.Diagnostics.Debug.WriteLine("ValidatePathWithFallback: No account available for validation");
+            return path; // Return original path if can't validate
         }
 
+        var authResult = await _pca.AcquireTokenSilent(scopes, account).ExecuteAsync();
+
+        using (var context = new ClientContext(_siteUrl))
+        {
+            context.ExecutingWebRequest += (s, e) => { e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken; };
+
+            // Generate multiple path variations to try
+            var pathsToTry = new List<string>();
+            
+            // 1. Original path
+            pathsToTry.Add(path);
+            
+            // 2. Properly URL-encoded version
+            pathsToTry.Add(ConstructProperlyEncodedPath(path));
+            
+            // 3. SharePoint library pattern (spaces removed from library name only)
+            if (path.Contains(_libraryName) && _libraryName.Contains(" "))
+            {
+                string libraryWithoutSpaces = _libraryName.Replace(" ", "");
+                string sharePointLibraryPath = path.Replace(_libraryName, libraryWithoutSpaces);
+                pathsToTry.Add(sharePointLibraryPath);
+                
+                // 4. SharePoint library pattern with URL encoding for folder names
+                pathsToTry.Add(ConstructProperlyEncodedPath(sharePointLibraryPath));
+            }
+
+            // Remove duplicates while preserving order
+            pathsToTry = pathsToTry.Distinct().ToList();
+
+            for (int i = 0; i < pathsToTry.Count; i++)
+            {
+                try
+                {
+                    string currentPath = pathsToTry[i];
+                    System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: Attempting validation of path {i + 1}/{pathsToTry.Count}: {currentPath}");
+
+                    var folder = context.Web.GetFolderByServerRelativeUrl(currentPath);
+                    context.Load(folder, f => f.Exists);
+                    await context.ExecuteQueryAsync();
+
+                    if (folder.Exists)
+                    {
+                        if (i > 0)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: SUCCESS using fallback path {i + 1}: {currentPath}");
+                            System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: Original path that failed: {path}");
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: SUCCESS with original path: {currentPath}");
+                        }
+                        return currentPath;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: Path validation failed for {pathsToTry[i]}: {ex.Message}");
+                    continue; // Try next path
+                }
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: Validation error: {ex.Message}");
+    }
+
+    System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: All validation attempts failed, returning original path: {path}");
+    return path; // Return original if all attempts fail
+}
 
         // Method to get the actual library path with proper space handling
         private string GetActualLibraryPath(string webServerRelativeUrl, string libraryName)
