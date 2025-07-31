@@ -1406,47 +1406,75 @@ namespace EntraGroupsApp
 
             try
             {
-                context.Load(parentFolder, f => f.Folders.Include(
-                    sf => sf.Name,
-                    sf => sf.ServerRelativeUrl,
-                    sf => sf.ListItemAllFields.HasUniqueRoleAssignments,
-                    sf => sf.ListItemAllFields.RoleAssignments.Include(
-                        ra => ra.Member.Title,
-                        ra => ra.Member.LoginName,
-                        ra => ra.RoleDefinitionBindings),
-                    sf => sf.Folders));
-                await context.ExecuteQueryAsync();
+                string parentPath = parentFolder.ServerRelativeUrl ?? NormalizePath($"{webServerRelativeUrl}/{_libraryName}", false);
+                System.Diagnostics.Debug.WriteLine($"LoadNestedFoldersAsync: Starting for parentPath: {parentPath}, level: {currentLevel}");
 
-                string librarySlug = _libraryName.Replace(" ", "");
-                string libraryPath = $"{webServerRelativeUrl.TrimEnd('/')}/{librarySlug}".Replace("//", "/");
+                int attempt = 1;
+                bool success = false;
+                string currentPath = parentPath;
 
-                var subfolders = parentFolder.Folders?.Where(f => !f.Name.StartsWith("Forms")).ToList() ?? new List<Folder>();
-                System.Diagnostics.Debug.WriteLine($"LoadNestedFoldersAsync: Found {subfolders.Count} subfolders at level {currentLevel} for parent {parentFolder.ServerRelativeUrl ?? "null"}");
-
-                foreach (var subfolder in subfolders)
+                while (attempt <= 2 && !success)
                 {
-                    if (string.IsNullOrEmpty(subfolder.Name))
-                    {
-                        System.Diagnostics.Debug.WriteLine($"LoadNestedFoldersAsync: Skipping subfolder with null or empty Name");
-                        continue;
-                    }
+                    System.Diagnostics.Debug.WriteLine($"LoadNestedFoldersAsync: Attempt {attempt} with path: {currentPath}");
 
-                    var fullPath = string.IsNullOrEmpty(subfolder.ServerRelativeUrl)
-                        ? $"{parentFolder.ServerRelativeUrl}/{subfolder.Name}".Replace("//", "/")
-                        : subfolder.ServerRelativeUrl;
-                    if (string.IsNullOrEmpty(subfolder.ServerRelativeUrl))
+                    try
                     {
-                        System.Diagnostics.Debug.WriteLine($"LoadNestedFoldersAsync: Subfolder '{subfolder.Name}' has null ServerRelativeUrl, using constructed path: {fullPath}");
-                    }
+                        var targetFolder = context.Web.GetFolderByServerRelativeUrl(currentPath);
+                        context.Load(targetFolder, f => f.Folders.Include(
+                            sf => sf.Name,
+                            sf => sf.ServerRelativeUrl,
+                            sf => sf.ListItemAllFields.HasUniqueRoleAssignments,
+                            sf => sf.ListItemAllFields.RoleAssignments.Include(
+                                ra => ra.Member.Title,
+                                ra => ra.Member.LoginName,
+                                ra => ra.RoleDefinitionBindings),
+                            sf => sf.Folders));
+                        await context.ExecuteQueryAsync();
 
-                    allFolders.Add(subfolder);
-                    if (currentLevel < _maxNestingLevel)
+                        var subfolders = targetFolder.Folders?.Where(f => !f.Name.StartsWith("Forms")).ToList() ?? new List<Folder>();
+                        System.Diagnostics.Debug.WriteLine($"LoadNestedFoldersAsync: Found {subfolders.Count} subfolders at level {currentLevel} for parent {currentPath ?? "null"}");
+
+                        foreach (var subfolder in subfolders)
+                        {
+                            if (string.IsNullOrEmpty(subfolder.Name))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"LoadNestedFoldersAsync: Skipping subfolder with null or empty Name");
+                                continue;
+                            }
+
+                            var fullPath = NormalizePath(string.IsNullOrEmpty(subfolder.ServerRelativeUrl)
+                                ? $"{currentPath}/{subfolder.Name}"
+                                : subfolder.ServerRelativeUrl, true); // Encode for folders
+                            if (string.IsNullOrEmpty(subfolder.ServerRelativeUrl))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"LoadNestedFoldersAsync: Subfolder '{subfolder.Name}' has null ServerRelativeUrl, using constructed path: {fullPath}");
+                            }
+
+                            allFolders.Add(subfolder);
+                            if (currentLevel < _maxNestingLevel)
+                            {
+                                var nestedFolders = await LoadNestedFoldersAsync(context, subfolder, webServerRelativeUrl, currentLevel + 1);
+                                allFolders.AddRange(nestedFolders);
+                            }
+
+                            System.Diagnostics.Debug.WriteLine($"LoadNestedFoldersAsync: Processed subfolder '{subfolder.Name}', FullPath={fullPath}, HTTPS={_siteUrl}{fullPath}");
+                        }
+
+                        success = true;
+                        System.Diagnostics.Debug.WriteLine($"LoadNestedFoldersAsync: Success on attempt {attempt} with path: {currentPath}");
+                    }
+                    catch (Microsoft.SharePoint.Client.ServerException ex) when (ex.Message.Contains("not found") || ex.Message.Contains("does not exist"))
                     {
-                        var nestedFolders = await LoadNestedFoldersAsync(context, subfolder, webServerRelativeUrl, currentLevel + 1);
-                        allFolders.AddRange(nestedFolders);
+                        if (attempt == 1)
+                        {
+                            // Fallback: Encode library part if it's the root
+                            currentPath = NormalizePath(currentPath.Replace(_libraryName.Replace(" ", ""), Uri.EscapeDataString(_libraryName)), true);
+                            System.Diagnostics.Debug.WriteLine($"LoadNestedFoldersAsync: Original failed ({ex.Message}). Trying fallback path: {currentPath}");
+                            attempt++;
+                            continue;
+                        }
+                        throw;
                     }
-
-                    System.Diagnostics.Debug.WriteLine($"LoadNestedFoldersAsync: Processed subfolder '{subfolder.Name}', FullPath={fullPath}, HTTPS={_siteUrl}{fullPath}");
                 }
             }
             catch (Exception ex)
@@ -1457,7 +1485,7 @@ namespace EntraGroupsApp
             }
 
             return allFolders;
-        }        // New method to load nested folders on-demand for a specific parent
+        }
         private async Task<List<Folder>> LoadSubfoldersForParentAsync(string parentPath)
         {
             var nestedFolders = new List<Folder>();
@@ -1528,6 +1556,7 @@ namespace EntraGroupsApp
 
             return allFolders;
         }
+
         private async Task LoadCurrentPermissionsAsync(string debugSessionId = null, bool preserveTreeViewState = false)
         {
             debugSessionId = debugSessionId ?? Guid.NewGuid().ToString();
@@ -2242,57 +2271,31 @@ namespace EntraGroupsApp
             });
         }
 
-        private string NormalizePath(string path)
+        private string NormalizePath(string path, bool encodeSpaces = false)
         {
-            if (string.IsNullOrEmpty(path)) return string.Empty;
-
-            // Remove duplicate slashes and normalize
-            var normalized = path.Replace("//", "/");
-
-            // Split into segments and remove duplicates
-            var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            var uniqueSegments = new List<string>();
-
-            for (int i = 0; i < segments.Length; i++)
+            if (string.IsNullOrEmpty(path)) return path;
+            if (encodeSpaces)
             {
-                var segment = segments[i];
-
-                // Skip duplicate consecutive segments (like /teams/DeansOfficeDrive/teams/DeansOfficeDrive/)
-                if (uniqueSegments.Count == 0 || !string.Equals(uniqueSegments.Last(), segment, StringComparison.OrdinalIgnoreCase))
-                {
-                    uniqueSegments.Add(segment);
-                }
-                // Special case: if we see the same site pattern twice in a row, remove the duplicate
-                else if (i > 0 && i < segments.Length - 1)
-                {
-                    // Check if this might be a duplicated site path (teams/sitename pattern)
-                    if (uniqueSegments.Count >= 2 &&
-                        string.Equals(uniqueSegments[uniqueSegments.Count - 2], "teams", StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(segment, "teams", StringComparison.OrdinalIgnoreCase))
-                    {
-                        // This looks like a duplicate teams/sitename pattern, skip it
-                        System.Diagnostics.Debug.WriteLine($"Skipping duplicate segment: {segment}");
-                        continue;
-                    }
-                    uniqueSegments.Add(segment);
-                }
+                // Split and encode segments
+                var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                path = "/" + string.Join("/", segments.Select(Uri.EscapeDataString));
             }
-
-            var result = "/" + string.Join("/", uniqueSegments);
-            System.Diagnostics.Debug.WriteLine($"NormalizePath: '{path}' -> '{result}'");
-            return result;
+            path = path.Replace("//", "/").TrimEnd('/');
+            System.Diagnostics.Debug.WriteLine($"Normalized path (encodeSpaces={encodeSpaces}): {path}");
+            return path;
         }
         private string ConstructSubfolderPath(TreeNode node, string webServerRelativeUrl, string libraryName)
         {
             if (node?.Tag is not TreeNodeData nodeData || !nodeData.IsSubfolder)
                 return null;
 
-            // If we already have a valid FullPath, use it (but normalize it first)
+            // If we already have a valid FullPath, clean and use it
             if (!string.IsNullOrEmpty(nodeData.FullPath))
             {
-                var normalized = CleanDuplicateSitePath(NormalizePath(nodeData.FullPath), _siteUrl);
-                System.Diagnostics.Debug.WriteLine($"Using existing FullPath: {normalized}");
-                return normalized;
+                var normalized = NormalizePath(nodeData.FullPath);
+                var cleaned = CleanDuplicateSitePath(normalized, _siteUrl);
+                System.Diagnostics.Debug.WriteLine($"ConstructSubfolderPath: Using existing FullPath: {cleaned}");
+                return cleaned;
             }
 
             // Build path by walking up the tree
@@ -2305,23 +2308,21 @@ namespace EntraGroupsApp
                 currentNode = currentNode.Parent;
             }
 
-            // Construct the full path - FIXED: Ensure webServerRelativeUrl doesn't already contain site path
+            // Construct the full path - ensure clean webServerRelativeUrl
             string librarySlug = libraryName.Replace(" ", "");
-
-            // Remove any duplicate site path components from webServerRelativeUrl
-            string cleanWebPath = webServerRelativeUrl.TrimEnd('/');
+            string cleanWebPath = CleanDuplicateSitePath(webServerRelativeUrl.TrimEnd('/'), _siteUrl);
 
             string fullPath = $"{cleanWebPath}/{librarySlug}/{string.Join("/", pathParts)}";
-            var normalizedPath = CleanDuplicateSitePath(NormalizePath(fullPath), _siteUrl);
+            var normalizedPath = NormalizePath(fullPath);
+            var finalCleanedPath = CleanDuplicateSitePath(normalizedPath, _siteUrl);
 
-            System.Diagnostics.Debug.WriteLine($"Constructed path from tree walk: {normalizedPath}");
+            System.Diagnostics.Debug.WriteLine($"ConstructSubfolderPath: Constructed path from tree walk: {finalCleanedPath}");
 
             // Update the node's FullPath for future use
-            nodeData.FullPath = normalizedPath;
+            nodeData.FullPath = finalCleanedPath;
 
-            return normalizedPath;
+            return finalCleanedPath;
         }
-
         private bool IsValidSharePointPath(string path, string expectedSiteUrl)
         {
             if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(expectedSiteUrl))
@@ -2725,6 +2726,36 @@ namespace EntraGroupsApp
                 }
             });
         }
+
+        private string ConstructFullHttpsUrl(string relativePath)
+        {
+            if (string.IsNullOrEmpty(relativePath) || string.IsNullOrEmpty(_siteUrl))
+                return string.Empty;
+
+            try
+            {
+                var siteUri = new Uri(_siteUrl);
+                var sitePath = siteUri.AbsolutePath.TrimEnd('/');
+
+                // Clean the relative path first
+                var cleanedRelativePath = CleanDuplicateSitePath(NormalizePath(relativePath), _siteUrl);
+
+                // If the relative path already starts with the site path, don't duplicate it
+                if (cleanedRelativePath.StartsWith(sitePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"{siteUri.Scheme}://{siteUri.Host}{cleanedRelativePath}";
+                }
+                else
+                {
+                    return $"{siteUri.Scheme}://{siteUri.Host}{sitePath}{cleanedRelativePath}";
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ConstructFullHttpsUrl: Error constructing HTTPS URL: {ex.Message}");
+                return $"{_siteUrl}{relativePath}"; // Fallback to simple concatenation
+            }
+        }
         private void tvSubfolders_AfterSelect(object sender, TreeViewEventArgs e)
         {
             UpdateUI(() =>
@@ -2733,6 +2764,24 @@ namespace EntraGroupsApp
                 UpdateSidebar();
                 isUpdatingTreeView = false;
             });
+        }
+
+        private string GetLibraryPathWithFallback(string webServerRelativeUrl, string libraryName, out bool usedFallback)
+        {
+            usedFallback = false;
+
+            // Original: Remove spaces
+            string librarySlug = libraryName.Replace(" ", "");
+            string originalPath = $"{webServerRelativeUrl.TrimEnd('/')}/{librarySlug}".Replace("//", "/");
+            System.Diagnostics.Debug.WriteLine($"Constructed original library path: {originalPath}");
+
+            // Fallback: Encode spaces as %20
+            string encodedName = Uri.EscapeDataString(libraryName);
+            string fallbackPath = $"{webServerRelativeUrl.TrimEnd('/')}/{encodedName}".Replace("//", "/");
+            System.Diagnostics.Debug.WriteLine($"Constructed fallback library path: {fallbackPath}");
+
+            // For now, return original; fallback will be used in try-catch during execution
+            return originalPath; // Caller will handle retry
         }
 
         private void cmbGroups_SelectedIndexChanged(object sender, EventArgs e)
@@ -3440,43 +3489,63 @@ namespace EntraGroupsApp
         }
         private async void btnBreakInheritance_Click(object sender, EventArgs e)
         {
+            string subfolderPath = null;
             string subfolderName = null;
+            string subfolderRelativeUrl = null;
+            int subfolderLevel = -1;
             string debugSessionId = Guid.NewGuid().ToString();
-            TreeNodeData nodeData = null;
-            UpdateUI(() => { isUpdatingTreeView = true; btnBreakInheritance.Enabled = false; isUpdatingTreeView = false; });
+            UpdateUI(() => { isUpdatingTreeView = true; btnBreakInheritance.Enabled = false; });
 
             try
             {
-                if (tvSubfolders.SelectedNode == null || !(tvSubfolders.SelectedNode.Tag is TreeNodeData selectedNodeData) || !selectedNodeData.IsSubfolder)
+                if (tvSubfolders.SelectedNode == null || !(tvSubfolders.SelectedNode.Tag is TreeNodeData nodeData) || !nodeData.IsSubfolder)
                 {
-                    UpdateUI(() => { MessageBox.Show("Please select a subfolder.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information); lblStatus.Text = "Break inheritance cancelled: Invalid subfolder selection."; });
-                    await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceError", _libraryName, null, "Subfolder", $"Invalid subfolder selection, Session ID: {debugSessionId}");
+                    UpdateUI(() =>
+                    {
+                        MessageBox.Show("Please select a subfolder.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        lblStatus.Text = "Break inheritance cancelled: Invalid subfolder selection.";
+                    });
+                    await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceError", _libraryName, null, "Subfolder",
+                        $"Invalid subfolder selection, Session ID: {debugSessionId}");
                     return;
                 }
 
-                nodeData = selectedNodeData;
+                subfolderPath = nodeData.FullPath;
                 subfolderName = nodeData.SubfolderName;
-                int subfolderLevel = nodeData.Level;
-                string subfolderPath = nodeData.FullPath;
+                subfolderLevel = nodeData.Level;
 
-                // Check current permissions state
-                bool isNested = !string.IsNullOrEmpty(subfolderPath) && _nestedSubfolderCache.Any(s => string.Equals(s.FullPath, subfolderPath, StringComparison.OrdinalIgnoreCase));
-                var cacheEntryNested = isNested ? _nestedSubfolderCache.FirstOrDefault(s => string.Equals(s.FullPath, subfolderPath, StringComparison.OrdinalIgnoreCase)) : default;
-                var cacheEntryTop = !isNested && subfolderName != null ? _subfolderCache.FirstOrDefault(s => string.Equals(s.SubfolderName, subfolderName, StringComparison.OrdinalIgnoreCase)) : default;
-                bool hasUniquePermissions = isNested ? (!string.IsNullOrEmpty(cacheEntryNested.FullPath) && cacheEntryNested.HasUniquePermissions) : (!string.IsNullOrEmpty(cacheEntryTop.SubfolderName) && cacheEntryTop.HasUniquePermissions);
+                bool isNested = _nestedSubfolderCache.Any(s => string.Equals(s.FolderName, subfolderName, StringComparison.OrdinalIgnoreCase));
+                bool hasUniquePermissions;
+                if (isNested)
+                {
+                    var cacheEntry = _nestedSubfolderCache.FirstOrDefault(s => string.Equals(s.FolderName, subfolderName, StringComparison.OrdinalIgnoreCase));
+                    hasUniquePermissions = cacheEntry.FullPath != null && cacheEntry.HasUniquePermissions;
+                }
+                else
+                {
+                    var cacheEntry = _subfolderCache.FirstOrDefault(s => string.Equals(s.SubfolderName, subfolderName, StringComparison.OrdinalIgnoreCase));
+                    hasUniquePermissions = cacheEntry.SubfolderName != null && cacheEntry.HasUniquePermissions;
+                }
 
                 if (hasUniquePermissions)
                 {
-                    UpdateUI(() => { MessageBox.Show("Subfolder already has unique permissions.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information); lblStatus.Text = "Break inheritance cancelled: Subfolder already has unique permissions."; });
-                    await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceError", _libraryName, null, "Subfolder", $"Subfolder '{subfolderName}' already has unique permissions, Session ID: {debugSessionId}");
+                    UpdateUI(() =>
+                    {
+                        MessageBox.Show("Subfolder already has unique permissions.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        lblStatus.Text = "Break inheritance cancelled: Subfolder already has unique permissions.";
+                    });
+                    await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceError", _libraryName, null, "Subfolder",
+                        $"Subfolder '{subfolderName}' already has unique permissions, Session ID: {debugSessionId}");
                     return;
                 }
 
-                var confirm = MessageBox.Show($"Are you sure you want to break permission inheritance for '{subfolderName}'? This will copy existing permissions and allow modifications.", "Confirm Break Inheritance", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                var confirm = MessageBox.Show($"Are you sure you want to break permission inheritance for '{subfolderName}'? This will allow unique permissions to be set.",
+                    "Confirm Break Inheritance", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
                 if (confirm != DialogResult.Yes)
                 {
                     UpdateUI(() => { lblStatus.Text = "Break inheritance cancelled by user."; });
-                    await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceCancelled", _libraryName, null, "Subfolder", $"User cancelled breaking inheritance for subfolder '{subfolderName}', Session ID: {debugSessionId}");
+                    await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceCancelled", _libraryName, null, "Subfolder",
+                        $"User cancelled breaking inheritance for subfolder '{subfolderName}', Session ID: {debugSessionId}");
                     return;
                 }
 
@@ -3487,48 +3556,45 @@ namespace EntraGroupsApp
                 var account = accounts.FirstOrDefault();
                 if (account == null)
                 {
-                    UpdateUI(() => { MessageBox.Show("No signed-in account found. Please sign in again.", "Authentication Error", MessageBoxButtons.OK, MessageBoxIcon.Warning); lblStatus.Text = "Error: No signed-in account."; });
-                    await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceError", _libraryName, null, "Subfolder", $"No signed-in account found, Session ID: {debugSessionId}");
+                    UpdateUI(() =>
+                    {
+                        MessageBox.Show("No signed-in account found. Please sign in again.", "Authentication Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        lblStatus.Text = "Error: No signed-in account.";
+                    });
+                    await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceError", _libraryName, null, "Subfolder",
+                        $"No signed-in account found, Session ID: {debugSessionId}");
                     return;
                 }
-
                 var authResult = await _pca.AcquireTokenSilent(scopes, account).ExecuteAsync();
-                const int maxRetries = 3;
-                int retryCount = 0;
+
+                string webServerRelativeUrl;
+                using (var tempContext = new ClientContext(_siteUrl))
+                {
+                    tempContext.ExecutingWebRequest += (s, e) => { e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken; };
+                    tempContext.Load(tempContext.Web, w => w.ServerRelativeUrl);
+                    await tempContext.ExecuteQueryAsync();
+                    webServerRelativeUrl = tempContext.Web.ServerRelativeUrl;
+                }
+
+                // Construct path with fallback for library
+                bool usedFallback = false;
+                subfolderRelativeUrl = isNested ? NormalizePath(subfolderPath, true) : NormalizePath($"{webServerRelativeUrl.TrimEnd('/')}/{_libraryName}/{subfolderName}", false);
+                string originalLibraryPart = _libraryName.Replace(" ", "");
+                string fallbackLibraryPart = Uri.EscapeDataString(_libraryName);
+
+                const int maxRetries = 2;
+                int attempt = 1;
                 bool success = false;
-                string subfolderRelativeUrl = null;
 
-                // Construct or use existing full path
-                if (string.IsNullOrEmpty(subfolderPath))
+                while (attempt <= maxRetries && !success)
                 {
-                    // Fallback: construct path for top-level subfolders
-                    using (var tempContext = new ClientContext(_siteUrl))
-                    {
-                        tempContext.ExecutingWebRequest += (s, e) => { e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken; };
-                        tempContext.Load(tempContext.Web, w => w.ServerRelativeUrl);
-                        await tempContext.ExecuteQueryAsync();
-                        string webServerRelativeUrl = tempContext.Web.ServerRelativeUrl;
-                        string librarySlug = _libraryName.Replace(" ", "");
-                        subfolderRelativeUrl = $"{webServerRelativeUrl.TrimEnd('/')}/{librarySlug}/{subfolderName}".Replace("//", "/");
-                    }
-                }
-                else
-                {
-                    subfolderRelativeUrl = subfolderPath;
-                }
+                    System.Diagnostics.Debug.WriteLine($"btnBreakInheritance_Click: Attempt {attempt} with path: {subfolderRelativeUrl}, Session ID: {debugSessionId}");
 
-                System.Diagnostics.Debug.WriteLine($"btnBreakInheritance_Click: Breaking inheritance for '{subfolderName}' at path '{subfolderRelativeUrl}', Level={subfolderLevel}, HTTPS={_siteUrl}{subfolderRelativeUrl}");
-
-                while (retryCount < maxRetries && !success)
-                {
                     try
                     {
                         using (var context = new ClientContext(_siteUrl))
                         {
                             context.ExecutingWebRequest += (s, e) => { e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken; };
-                            context.Load(context.Web, w => w.ServerRelativeUrl);
-                            await context.ExecuteQueryAsync();
-
                             Folder subfolder = context.Web.GetFolderByServerRelativeUrl(subfolderRelativeUrl);
                             context.Load(subfolder, f => f.Name, f => f.ServerRelativeUrl, f => f.ListItemAllFields);
                             var listItem = subfolder.ListItemAllFields;
@@ -3542,15 +3608,16 @@ namespace EntraGroupsApp
                             await context.ExecuteQueryAsync();
 
                             if (!listItem.HasUniqueRoleAssignments)
-                                throw new Exception("Failed to break inheritance: Subfolder still has inherited permissions.");
+                                throw new Exception("Failed to break inheritance: Subfolder still inherits permissions.");
 
-                            // Update cache based on whether it's nested or top-level
                             UpdateUI(() =>
                             {
                                 isUpdatingTreeView = true;
+                                lblStatus.Text = $"Broke permission inheritance for '{subfolderName}'.";
+
                                 if (isNested)
                                 {
-                                    var cacheIndex = _nestedSubfolderCache.FindIndex(s => string.Equals(s.FullPath, subfolderRelativeUrl, StringComparison.OrdinalIgnoreCase));
+                                    var cacheIndex = _nestedSubfolderCache.FindIndex(s => string.Equals(s.FullPath, subfolderPath, StringComparison.OrdinalIgnoreCase));
                                     if (cacheIndex >= 0)
                                     {
                                         var existing = _nestedSubfolderCache[cacheIndex];
@@ -3562,50 +3629,40 @@ namespace EntraGroupsApp
                                     var cacheIndex = _subfolderCache.FindIndex(s => string.Equals(s.SubfolderName, subfolderName, StringComparison.OrdinalIgnoreCase));
                                     if (cacheIndex >= 0)
                                     {
-                                        var existing = _subfolderCache[cacheIndex];
-                                        _subfolderCache[cacheIndex] = (existing.SubfolderName, true, existing.Groups);
+                                        _subfolderCache[cacheIndex] = (subfolderName, true, _subfolderCache[cacheIndex].Groups);
                                     }
                                 }
 
-                                // Update the TreeView node text to reflect unique permissions
-                                if (tvSubfolders.SelectedNode != null)
+                                var node = FindNodeByPath(tvSubfolders.Nodes, subfolderPath ?? subfolderRelativeUrl);
+                                if (node != null && node.Tag is TreeNodeData nodeData)
                                 {
-                                    var currentGroupCount = isNested ? cacheEntryNested.Groups?.Count ?? 0 : cacheEntryTop.Groups?.Count ?? 0;
-                                    tvSubfolders.SelectedNode.Text = $"{subfolderName} (Unique, {currentGroupCount} CSG group{(currentGroupCount == 1 ? "" : "s")} assigned)";
+                                    node.Text = $"{nodeData.SubfolderName} (Unique, 0 CSG groups assigned)";
+                                    node.Nodes.Clear();
                                 }
 
-                                lblStatus.Text = $"Broke permission inheritance for '{subfolderName}'.";
                                 UpdateSidebar();
                                 isUpdatingTreeView = false;
                             });
 
                             await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritance", _libraryName, null, "Subfolder",
-                                $"Broke permission inheritance for subfolder '{subfolderName}' at level {subfolderLevel}, Path: {subfolderRelativeUrl}, Session ID: {debugSessionId}");
+                                $"Broke permission inheritance for subfolder '{subfolderName}' at '{subfolderRelativeUrl}', Session ID: {debugSessionId}");
                             success = true;
+                            System.Diagnostics.Debug.WriteLine($"btnBreakInheritance_Click: Success on attempt {attempt} with path: {subfolderRelativeUrl}, Session ID: {debugSessionId}");
 
-                            // Enhanced: Use targeted refresh for nested operations, full refresh for top-level
-                            bool isNestedOperation = subfolderLevel > 0;
-                            if (isNestedOperation)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"btnBreakInheritance_Click: Using targeted refresh for nested subfolder at level {subfolderLevel}");
-                                await RefreshSpecificSubfolderPermissions(subfolderRelativeUrl);
-                            }
-                            else
-                            {
-                                System.Diagnostics.Debug.WriteLine($"btnBreakInheritance_Click: Using full refresh for top-level subfolder");
-                                lastRefreshTime = DateTime.MinValue;
-                                await LoadCurrentPermissionsAsync(debugSessionId);
-                            }
+                            lastRefreshTime = DateTime.MinValue;
+                            await LoadCurrentPermissionsAsync(debugSessionId);
                         }
                     }
-                    catch (Exception ex)
+                    catch (Microsoft.SharePoint.Client.ServerException ex) when (ex.Message.Contains("not found") || ex.Message.Contains("does not exist"))
                     {
-                        retryCount++;
-                        if (retryCount < maxRetries)
+                        if (attempt == 1)
                         {
-                            await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceRetry", _libraryName, null, "Subfolder",
-                                $"Retry {retryCount} for breaking inheritance on '{subfolderName}' at level {subfolderLevel}: {ex.Message}, Inner: {(ex.InnerException?.Message ?? "None")}, Session ID: {debugSessionId}");
-                            await Task.Delay(1000 * retryCount);
+                            // Replace library part with encoded version
+                            subfolderRelativeUrl = subfolderRelativeUrl.Replace(originalLibraryPart, fallbackLibraryPart);
+                            subfolderRelativeUrl = NormalizePath(subfolderRelativeUrl, true);
+                            usedFallback = true;
+                            System.Diagnostics.Debug.WriteLine($"btnBreakInheritance_Click: Original path failed ({ex.Message}). Trying fallback path: {subfolderRelativeUrl}, Session ID: {debugSessionId}");
+                            attempt++;
                             continue;
                         }
 
@@ -3619,7 +3676,14 @@ namespace EntraGroupsApp
                         });
                         await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceError", _libraryName, null, "Subfolder",
                             $"Failed to break inheritance for subfolder '{subfolderName}' at level {subfolderLevel}, Path: {subfolderRelativeUrl}: {ex.Message}, Inner: {(ex.InnerException?.Message ?? "None")}, StackTrace: {ex.StackTrace}, Session ID: {debugSessionId}");
+                        return;
                     }
+                }
+
+                if (usedFallback)
+                {
+                    await _auditLogManager?.LogAction(_signedInUserId, null, "BreakInheritancePathFallbackUsed", _libraryName, null, "Subfolder",
+                        $"Used fallback %20 path for subfolder: {subfolderRelativeUrl}, Session ID: {debugSessionId}");
                 }
             }
             catch (Exception ex)
@@ -3633,11 +3697,16 @@ namespace EntraGroupsApp
                     isUpdatingTreeView = false;
                 });
                 await _auditLogManager.LogAction(_signedInUserId, null, "BreakInheritanceError", _libraryName, null, "Subfolder",
-                    $"Failed to break inheritance for subfolder '{subfolderName ?? "unknown"}' at level {nodeData?.Level ?? -1}: {ex.Message}, Inner: {(ex.InnerException?.Message ?? "None")}, Session ID: {debugSessionId}");
+                    $"Failed to break inheritance for subfolder '{subfolderName ?? "unknown"}' at level {subfolderLevel}: {ex.Message}, Inner: {(ex.InnerException?.Message ?? "None")}, StackTrace: {ex.StackTrace}, Session ID: {debugSessionId}");
             }
             finally
             {
-                UpdateUI(() => { isUpdatingTreeView = true; btnBreakInheritance.Enabled = true; isUpdatingTreeView = false; });
+                UpdateUI(() =>
+                {
+                    isUpdatingTreeView = true;
+                    btnBreakInheritance.Enabled = true;
+                    isUpdatingTreeView = false;
+                });
             }
         }
         private async Task RefreshSpecificSubfolderPermissions(string subfolderPath)
@@ -4361,6 +4430,188 @@ namespace EntraGroupsApp
         {
             UpdateUI(() => this.Close());
         }
+
+        // Helper method to construct properly URL-encoded path
+        private string ConstructProperlyEncodedPath(string originalPath)
+        {
+            if (string.IsNullOrEmpty(originalPath))
+                return originalPath;
+
+            try
+            {
+                // Split path into segments and properly encode each segment
+                var pathSegments = originalPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                var encodedSegments = pathSegments.Select(segment => Uri.EscapeDataString(segment)).ToArray();
+                var encodedPath = "/" + string.Join("/", encodedSegments);
+
+                System.Diagnostics.Debug.WriteLine($"ConstructProperlyEncodedPath: Original: {originalPath}");
+                System.Diagnostics.Debug.WriteLine($"ConstructProperlyEncodedPath: Encoded: {encodedPath}");
+
+                return encodedPath;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ConstructProperlyEncodedPath: Error encoding path '{originalPath}': {ex.Message}");
+                return originalPath; // Return original if encoding fails
+            }
+        }
+
+
+
+        // Helper method to validate a path with %20 fallback
+        private async Task<string> ValidatePathWithFallback(string path)
+        {
+            try
+            {
+                var scopes = new[] { "https://tamucs.sharepoint.com/.default" };
+                var accounts = await _pca.GetAccountsAsync();
+                var account = accounts.FirstOrDefault();
+                if (account == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("ValidatePathWithFallback: No account available for validation");
+                    return path; // Return original path if can't validate
+                }
+
+                var authResult = await _pca.AcquireTokenSilent(scopes, account).ExecuteAsync();
+
+                using (var context = new ClientContext(_siteUrl))
+                {
+                    context.ExecutingWebRequest += (s, e) => { e.WebRequestExecutor.RequestHeaders["Authorization"] = "Bearer " + authResult.AccessToken; };
+
+                    // Try original path first
+                    string[] pathsToTry = {
+                path, // Original path
+                ConstructProperlyEncodedPath(path) // Properly URL-encoded version
+            };
+
+                    for (int i = 0; i < pathsToTry.Length; i++)
+                    {
+                        try
+                        {
+                            string currentPath = pathsToTry[i];
+                            System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: Attempting validation of path {i + 1}/{pathsToTry.Length}: {currentPath}");
+
+                            var folder = context.Web.GetFolderByServerRelativeUrl(currentPath);
+                            context.Load(folder, f => f.Exists);
+                            await context.ExecuteQueryAsync();
+
+                            if (folder.Exists)
+                            {
+                                if (i > 0)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: SUCCESS using properly URL-encoded fallback: {currentPath}");
+                                    System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: Original path that failed: {path}");
+                                }
+                                else
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: SUCCESS with original path: {currentPath}");
+                                }
+                                return currentPath;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: Path validation failed for {pathsToTry[i]}: {ex.Message}");
+                            continue; // Try next path
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: Validation error: {ex.Message}");
+            }
+
+            System.Diagnostics.Debug.WriteLine($"ValidatePathWithFallback: All validation attempts failed, returning original path: {path}");
+            return path; // Return original if all attempts fail
+        }
+
+
+        // Method to get the actual library path with proper space handling
+        private string GetActualLibraryPath(string webServerRelativeUrl, string libraryName)
+        {
+            // First, check if we have any cached nested folders that can tell us the actual structure
+            if (_nestedSubfolderCache?.Any() == true)
+            {
+                var anyNestedFolder = _nestedSubfolderCache.FirstOrDefault();
+                if (!string.IsNullOrEmpty(anyNestedFolder.FullPath))
+                {
+                    // Extract the library portion from a known good path
+                    var segments = anyNestedFolder.FullPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                    if (segments.Length >= 3) // Should have at least teams/sitename/library
+                    {
+                        var librarySegment = segments[2]; // Assuming structure like /teams/sitename/library/...
+                        var actualLibraryPath = $"{webServerRelativeUrl.TrimEnd('/')}/{librarySegment}";
+                        System.Diagnostics.Debug.WriteLine($"GetActualLibraryPath: Determined from cache: {actualLibraryPath}");
+                        return actualLibraryPath;
+                    }
+                }
+            }
+
+            // Check top-level cache for library path hints
+            if (_subfolderCache?.Any() == true)
+            {
+                // We can't directly get the library path from top-level cache, but we know it exists
+                // Try with spaces first (most common case)
+                string withSpaces = $"{webServerRelativeUrl.TrimEnd('/')}/{libraryName}";
+                System.Diagnostics.Debug.WriteLine($"GetActualLibraryPath: Using library name with spaces: {withSpaces}");
+                return withSpaces;
+            }
+
+            // Ultimate fallback: return with spaces (will be handled by fallback logic later)
+            string fallbackPath = $"{webServerRelativeUrl.TrimEnd('/')}/{libraryName}";
+            System.Diagnostics.Debug.WriteLine($"GetActualLibraryPath: Using fallback path: {fallbackPath}");
+            return fallbackPath;
+        }
+        private async Task<string> ConstructSubfolderPathWithFallback(TreeNode node, string webServerRelativeUrl, string libraryName)
+        {
+            if (node?.Tag is not TreeNodeData nodeData || !nodeData.IsSubfolder)
+                return null;
+
+            // If we already have a valid FullPath, clean and use it
+            if (!string.IsNullOrEmpty(nodeData.FullPath))
+            {
+                var normalized = NormalizePath(nodeData.FullPath);
+                var cleaned = CleanDuplicateSitePath(normalized, _siteUrl);
+                System.Diagnostics.Debug.WriteLine($"ConstructSubfolderPathWithFallback: Using existing FullPath: {cleaned}");
+                return cleaned;
+            }
+
+            // Get the actual library path
+            string actualLibraryPath = GetActualLibraryPath(webServerRelativeUrl, libraryName);
+
+            // Build path by walking up the tree
+            var pathParts = new List<string>();
+            var currentNode = node;
+
+            while (currentNode != null && currentNode.Tag is TreeNodeData currentData && currentData.IsSubfolder)
+            {
+                pathParts.Insert(0, currentData.SubfolderName);
+                currentNode = currentNode.Parent;
+            }
+
+            // Construct the full path using the actual library path
+            string fullPath = $"{actualLibraryPath}/{string.Join("/", pathParts)}";
+            var normalizedPath = NormalizePath(fullPath);
+            var finalCleanedPath = CleanDuplicateSitePath(normalizedPath, _siteUrl);
+
+            System.Diagnostics.Debug.WriteLine($"ConstructSubfolderPathWithFallback: Constructed path: {finalCleanedPath}");
+
+            // **VALIDATE PATH WITH %20 FALLBACK**
+            string validatedPath = await ValidatePathWithFallback(finalCleanedPath);
+
+            // Update the node's FullPath with the validated working path
+            if (!string.IsNullOrEmpty(validatedPath))
+            {
+                nodeData.FullPath = validatedPath;
+                System.Diagnostics.Debug.WriteLine($"ConstructSubfolderPathWithFallback: Validated and using path: {validatedPath}");
+                return validatedPath;
+            }
+
+            System.Diagnostics.Debug.WriteLine($"ConstructSubfolderPathWithFallback: Path validation failed, returning original: {finalCleanedPath}");
+            return finalCleanedPath; // Return original even if validation failed
+        }
+
         private async void btnViewSubfolders_Click(object sender, EventArgs e)
         {
             if (tvSubfolders?.SelectedNode == null || !(tvSubfolders.SelectedNode.Tag is TreeNodeData nodeData) || !nodeData.IsSubfolder)
@@ -4427,37 +4678,32 @@ namespace EntraGroupsApp
                     await context.ExecuteQueryAsync();
                     string webServerRelativeUrl = context.Web.ServerRelativeUrl;
 
-                    // FIXED: Use improved path construction and validation
+                    // **IMPROVED PATH CONSTRUCTION WITH ASYNC VALIDATION**
                     if (string.IsNullOrEmpty(parentRelativePath))
                     {
-                        parentRelativePath = ConstructSubfolderPath(parentNode, webServerRelativeUrl, _libraryName);
-                        System.Diagnostics.Debug.WriteLine($"Constructed parentRelativePath: {parentRelativePath}");
-
-                        // Update the nodeData for future use
-                        if (!string.IsNullOrEmpty(parentRelativePath))
-                        {
-                            nodeData.FullPath = parentRelativePath;
-                        }
+                        // Use the enhanced async method for better validation
+                        parentRelativePath = await ConstructSubfolderPathWithFallback(parentNode, webServerRelativeUrl, _libraryName);
+                        System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Constructed and validated parentRelativePath: {parentRelativePath}");
                     }
                     else
                     {
                         // Normalize existing path to remove any duplicates
                         parentRelativePath = NormalizePath(parentRelativePath);
-                        System.Diagnostics.Debug.WriteLine($"Normalized existing parentRelativePath: {parentRelativePath}");
+                        System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Normalized existing parentRelativePath: {parentRelativePath}");
                     }
 
                     // Validate the path before using it
-                    if (string.IsNullOrEmpty(parentRelativePath) || !IsValidSharePointPath(parentRelativePath, _siteUrl))
+                    if (string.IsNullOrEmpty(parentRelativePath))
                     {
                         UpdateUI(() =>
                         {
-                            MessageBox.Show($"Invalid subfolder path detected: {parentRelativePath ?? "null"}. Please refresh and try again.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                            lblStatus.Text = "Invalid subfolder path detected.";
+                            MessageBox.Show($"Could not determine subfolder path for '{parentName}'. Please refresh and try again.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            lblStatus.Text = "Could not determine subfolder path.";
                             btnViewSubfolders.Enabled = true;
                             this.Cursor = Cursors.Default;
                         });
                         await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersError", _libraryName, null, "Subfolder",
-                            $"Invalid subfolder path: {parentRelativePath ?? "null"}, Session ID: {debugSessionId}");
+                            $"Could not determine subfolder path for '{parentName}', Session ID: {debugSessionId}");
                         return;
                     }
 
@@ -4478,199 +4724,233 @@ namespace EntraGroupsApp
                         return;
                     }
 
-                    string librarySlug = _libraryName.Replace(" ", "");
-                    string libraryPath = NormalizePath($"{webServerRelativeUrl}/{librarySlug}");
+                    // **DUAL-PATH FALLBACK: Try original path first, then with proper URL encoding**
+                    string[] pathsToTry = {
+                parentRelativePath, // Should already be the validated path
+                ConstructProperlyEncodedPath(parentRelativePath) // Properly URL-encoded version
+            };
 
-                    System.Diagnostics.Debug.WriteLine($"Using paths - libraryPath: {libraryPath}, parentRelativePath: {parentRelativePath}");
+                    bool success = false;
+                    string workingPath = null;
+                    int attemptNumber = 0;
 
-                    var parentFolder = context.Web.GetFolderByServerRelativeUrl(parentRelativePath);
-                    context.Load(parentFolder, f => f.Exists, f => f.Name, f => f.ServerRelativeUrl, f => f.Folders);
-                    await context.ExecuteQueryAsync();
-
-                    System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Folder Exists={parentFolder.Exists}, ServerRelativeUrl={parentFolder.ServerRelativeUrl ?? "null"}");
-
-                    if (!parentFolder.Exists || string.IsNullOrEmpty(parentFolder.ServerRelativeUrl))
+                    foreach (string currentPath in pathsToTry)
                     {
-                        UpdateUI(() =>
+                        attemptNumber++;
+                        System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Attempt {attemptNumber}/{pathsToTry.Length} with path: {currentPath}");
+
+                        try
                         {
-                            MessageBox.Show($"Subfolder '{parentName}' not found or invalid at '{parentRelativePath}'.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                            lblStatus.Text = "Subfolder not found or invalid.";
-                            btnViewSubfolders.Enabled = true;
-                            this.Cursor = Cursors.Default;
-                        });
-                        await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersError", _libraryName, null, "Subfolder",
-                            $"Subfolder '{parentName}' not found or ServerRelativeUrl is null at '{parentRelativePath}', Session ID: {debugSessionId}");
-                        return;
-                    }
+                            var parentFolder = context.Web.GetFolderByServerRelativeUrl(currentPath);
+                            context.Load(parentFolder, f => f.Exists, f => f.Name, f => f.ServerRelativeUrl, f => f.Folders);
+                            await context.ExecuteQueryAsync();
 
-                    // Load direct subfolders only (not recursive)
-                    context.Load(parentFolder.Folders, folders => folders.Include(
-                        f => f.Name,
-                        f => f.ServerRelativeUrl,
-                        f => f.ListItemAllFields.HasUniqueRoleAssignments,
-                        f => f.ListItemAllFields.RoleAssignments.Include(
-                            ra => ra.Member.Title,
-                            ra => ra.Member.LoginName,
-                            ra => ra.RoleDefinitionBindings),
-                        f => f.Folders));
-                    await context.ExecuteQueryAsync();
+                            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Folder Exists={parentFolder.Exists}, ServerRelativeUrl={parentFolder.ServerRelativeUrl ?? "null"}");
 
-                    var directSubfolders = parentFolder.Folders?.Where(f => !f.Name.StartsWith("Forms")).ToList() ?? new List<Folder>();
-
-                    System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Found {directSubfolders.Count} direct subfolders in {parentRelativePath}");
-
-                    if (!directSubfolders.Any())
-                    {
-                        UpdateUI(() =>
-                        {
-                            MessageBox.Show($"No subfolders found in '{parentName}' at level {parentLevel + 1}.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                            lblStatus.Text = "No subfolders found.";
-                            btnViewSubfolders.Enabled = true;
-                            this.Cursor = Cursors.Default;
-                        });
-                        await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersNoSubfolders", _libraryName, null, "Subfolder",
-                            $"No subfolders found in '{parentName}' at level {parentLevel + 1}, Session ID: {debugSessionId}");
-                        return;
-                    }
-
-                    // Remove existing cached entries for this parent's children to avoid duplicates
-                    _nestedSubfolderCache.RemoveAll(s =>
-                        s.FullPath.StartsWith(parentRelativePath + "/", StringComparison.OrdinalIgnoreCase) &&
-                        s.Level == parentLevel + 1);
-
-                    var processedSubfolders = new List<(string FullPath, string FolderName, int Level, bool HasUniquePermissions,
-                        List<(string GroupName, string GroupId, string Role)> Groups, bool HasChildren)>();
-
-                    // Process each direct subfolder
-                    foreach (var subfolder in directSubfolders)
-                    {
-                        if (string.IsNullOrEmpty(subfolder.Name))
-                        {
-                            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Skipping subfolder with null or empty Name");
-                            continue;
-                        }
-
-                        var fullPath = NormalizePath(subfolder.ServerRelativeUrl);
-                        var folderName = subfolder.Name;
-                        var level = parentLevel + 1;
-                        bool hasChildren = subfolder.Folders?.Count(f => !f.Name.StartsWith("Forms")) > 0;
-                        var groupList = new List<(string GroupName, string GroupId, string Role)>();
-                        bool hasUniquePermissions = subfolder.ListItemAllFields?.HasUniqueRoleAssignments ?? false;
-
-                        // Validate the child path
-                        if (!IsValidSharePointPath(fullPath, _siteUrl))
-                        {
-                            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Skipping invalid child path: {fullPath}");
-                            await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersInvalidChildPath", _libraryName, null, "Subfolder",
-                                $"Invalid child path detected: {fullPath}, Session ID: {debugSessionId}");
-                            continue;
-                        }
-
-                        // Verify this is actually a direct child
-                        var normalizedParentPath = NormalizePath(parentRelativePath);
-                        if (!fullPath.StartsWith(normalizedParentPath + "/", StringComparison.OrdinalIgnoreCase))
-                        {
-                            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Path {fullPath} is not a child of {normalizedParentPath}");
-                            continue;
-                        }
-
-                        var relativePart = fullPath.Substring(normalizedParentPath.Length + 1);
-                        var pathSegments = relativePart.Split('/', StringSplitOptions.RemoveEmptyEntries);
-
-                        // Only process direct children (exactly 1 additional path segment)
-                        if (pathSegments.Length != 1)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Skipping non-direct child: {fullPath} (segments: {pathSegments.Length})");
-                            continue;
-                        }
-
-                        // Process permissions
-                        if (hasUniquePermissions && subfolder.ListItemAllFields?.RoleAssignments != null)
-                        {
-                            foreach (var ra in subfolder.ListItemAllFields.RoleAssignments)
+                            if (!parentFolder.Exists || string.IsNullOrEmpty(parentFolder.ServerRelativeUrl))
                             {
-                                try
+                                System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Folder does not exist or has null ServerRelativeUrl at: {currentPath}");
+                                continue; // Try next path
+                            }
+
+                            // Load direct subfolders only (not recursive)
+                            context.Load(parentFolder.Folders, folders => folders.Include(
+                                f => f.Name,
+                                f => f.ServerRelativeUrl,
+                                f => f.ListItemAllFields.HasUniqueRoleAssignments,
+                                f => f.ListItemAllFields.RoleAssignments.Include(
+                                    ra => ra.Member.Title,
+                                    ra => ra.Member.LoginName,
+                                    ra => ra.RoleDefinitionBindings),
+                                f => f.Folders));
+                            await context.ExecuteQueryAsync();
+
+                            var directSubfolders = parentFolder.Folders?.Where(f => !f.Name.StartsWith("Forms")).ToList() ?? new List<Folder>();
+
+                            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: SUCCESS - Found {directSubfolders.Count} direct subfolders in {currentPath}");
+
+                            if (attemptNumber > 1)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: SUCCESS using properly URL-encoded fallback path: {currentPath}");
+                                System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Previous path that failed: {pathsToTry[0]}");
+                            }
+
+                            success = true;
+                            workingPath = currentPath;
+
+                            if (!directSubfolders.Any())
+                            {
+                                UpdateUI(() =>
                                 {
-                                    if (ra.Member?.Title?.StartsWith("CSG-", StringComparison.OrdinalIgnoreCase) == true)
+                                    MessageBox.Show($"No subfolders found in '{parentName}' at level {parentLevel + 1}.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                                    lblStatus.Text = "No subfolders found.";
+                                    btnViewSubfolders.Enabled = true;
+                                    this.Cursor = Cursors.Default;
+                                });
+                                await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersNoSubfolders", _libraryName, null, "Subfolder",
+                                    $"No subfolders found in '{parentName}' at level {parentLevel + 1}, Session ID: {debugSessionId}");
+                                return;
+                            }
+
+                            // Remove existing cached entries for this parent's children to avoid duplicates
+                            _nestedSubfolderCache.RemoveAll(s =>
+                                s.FullPath.StartsWith(currentPath + "/", StringComparison.OrdinalIgnoreCase) &&
+                                s.Level == parentLevel + 1);
+
+                            var processedSubfolders = new List<(string FullPath, string FolderName, int Level, bool HasUniquePermissions,
+                                List<(string GroupName, string GroupId, string Role)> Groups, bool HasChildren)>();
+
+                            // Process each direct subfolder
+                            foreach (var subfolder in directSubfolders)
+                            {
+                                if (string.IsNullOrEmpty(subfolder.Name))
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Skipping subfolder with null or empty Name");
+                                    continue;
+                                }
+
+                                var fullPath = NormalizePath(subfolder.ServerRelativeUrl);
+                                var folderName = subfolder.Name;
+                                var level = parentLevel + 1;
+                                bool hasChildren = subfolder.Folders?.Count(f => !f.Name.StartsWith("Forms")) > 0;
+                                var groupList = new List<(string GroupName, string GroupId, string Role)>();
+                                bool hasUniquePermissions = subfolder.ListItemAllFields?.HasUniqueRoleAssignments ?? false;
+
+                                // Process permissions
+                                if (hasUniquePermissions && subfolder.ListItemAllFields?.RoleAssignments != null)
+                                {
+                                    foreach (var ra in subfolder.ListItemAllFields.RoleAssignments)
                                     {
-                                        var role = ra.RoleDefinitionBindings.FirstOrDefault()?.Name ?? "Unknown";
-                                        if (role == "Contribute") role = "Edit";
-                                        if (role != "Limited Access")
+                                        try
                                         {
-                                            var groupId = ra.Member.LoginName?.Split('|').Last() ?? string.Empty;
-                                            groupList.Add((ra.Member.Title, groupId, role));
+                                            if (ra.Member?.Title?.StartsWith("CSG-", StringComparison.OrdinalIgnoreCase) == true)
+                                            {
+                                                var role = ra.RoleDefinitionBindings.FirstOrDefault()?.Name ?? "Unknown";
+                                                if (role == "Contribute") role = "Edit";
+                                                if (role != "Limited Access")
+                                                {
+                                                    var groupId = ra.Member.LoginName?.Split('|').Last() ?? string.Empty;
+                                                    groupList.Add((ra.Member.Title, groupId, role));
+                                                }
+                                            }
+                                        }
+                                        catch (Exception raEx)
+                                        {
+                                            await _auditLogManager?.LogAction(_signedInUserId, null, "ProcessNestedSubfolderPermissionError", _libraryName, null, "Subfolder",
+                                                $"Error processing role assignment for nested subfolder '{folderName}': {raEx.Message}, Session ID: {debugSessionId}");
                                         }
                                     }
                                 }
-                                catch (Exception raEx)
+
+                                var folderData = (fullPath, folderName, level, hasUniquePermissions, groupList, hasChildren);
+                                processedSubfolders.Add(folderData);
+                                _nestedSubfolderCache.Add(folderData);
+
+                                System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Added level {level} subfolder to cache: FullPath={fullPath}, FolderName={folderName}");
+                            }
+
+                            if (!processedSubfolders.Any())
+                            {
+                                UpdateUI(() =>
                                 {
-                                    await _auditLogManager?.LogAction(_signedInUserId, null, "ProcessNestedSubfolderPermissionError", _libraryName, null, "Subfolder",
-                                        $"Error processing role assignment for nested subfolder '{folderName}': {raEx.Message}, Session ID: {debugSessionId}");
+                                    MessageBox.Show($"No valid subfolders found in '{parentName}' at level {parentLevel + 1}.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                                    lblStatus.Text = "No valid subfolders found.";
+                                    btnViewSubfolders.Enabled = true;
+                                    this.Cursor = Cursors.Default;
+                                });
+                                return;
+                            }
+
+                            // Update UI with the loaded subfolders
+                            UpdateUI(() =>
+                            {
+                                isUpdatingTreeView = true;
+
+                                // Clear existing child nodes that might be placeholders
+                                parentNode.Nodes.Clear();
+
+                                // Create a dictionary for potential nested children (for future expansion)
+                                var foldersByParent = _nestedSubfolderCache
+                                    .Where(f => f.Level > parentLevel + 1)
+                                    .GroupBy(f => GetParentPath(f.FullPath))
+                                    .ToDictionary(
+                                        g => g.Key,
+                                        g => g.Select(f => (f.FullPath, f.FolderName, f.Level, f.HasUniquePermissions, f.Groups, f.HasChildren)).ToList()
+                                    );
+
+                                // Add new child nodes
+                                foreach (var folder in processedSubfolders.OrderBy(f => f.FolderName))
+                                {
+                                    var node = CreateFolderTreeNode(folder, foldersByParent);
+                                    if (node != null)
+                                    {
+                                        node.BackColor = Color.LightYellow;
+                                        node.Text += " [Loaded]";
+                                        parentNode.Nodes.Add(node);
+                                    }
                                 }
+
+                                parentNode.Expand();
+                                lblStatus.Text = $"Loaded {processedSubfolders.Count} level {parentLevel + 1} subfolders for '{parentName}'.";
+                                isUpdatingTreeView = false;
+                                btnViewSubfolders.Enabled = true;
+                                this.Cursor = Cursors.Default;
+                            });
+
+                            await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersSuccess", _libraryName, null, "Subfolder",
+                                $"Successfully loaded {processedSubfolders.Count} subfolders for '{parentName}' at level {parentLevel + 1}, Session ID: {debugSessionId}");
+
+                            // Log if fallback was used
+                            if (attemptNumber > 1)
+                            {
+                                nodeData.FullPath = workingPath; // Update with working path
+                                await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersPathFallbackUsed", _libraryName, null, "Subfolder",
+                                    $"Used properly URL-encoded fallback path for subfolder: {workingPath}, Previous Path: {pathsToTry[0]}, Session ID: {debugSessionId}");
+                            }
+
+                            break; // Exit the foreach loop on success
+                        }
+                        catch (Microsoft.SharePoint.Client.ServerException ex) when (ex.Message.Contains("not found") || ex.Message.Contains("does not exist"))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Path not found (attempt {attemptNumber}): {currentPath}");
+                            System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Error details: {ex.Message}");
+
+                            if (attemptNumber < pathsToTry.Length)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Will try next path variation...");
+                                continue; // Try next path
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: All path attempts failed");
+                                throw; // Re-throw if this was the last attempt
                             }
                         }
-
-                        var folderData = (fullPath, folderName, level, hasUniquePermissions, groupList, hasChildren);
-                        processedSubfolders.Add(folderData);
-                        _nestedSubfolderCache.Add(folderData);
-
-                        System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Added level {level} subfolder to cache: FullPath={fullPath}, FolderName={folderName}");
                     }
 
-                    if (!processedSubfolders.Any())
+                    if (!success)
                     {
                         UpdateUI(() =>
                         {
-                            MessageBox.Show($"No valid subfolders found in '{parentName}' at level {parentLevel + 1}.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                            lblStatus.Text = "No valid subfolders found.";
+                            MessageBox.Show($"Subfolder '{parentName}' not found at any of the attempted paths:\n" +
+                                            $"1. {pathsToTry[0]}\n" +
+                                            $"2. {pathsToTry[1]}",
+                                "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            lblStatus.Text = "Subfolder not found at any attempted path.";
                             btnViewSubfolders.Enabled = true;
                             this.Cursor = Cursors.Default;
                         });
-                        return;
+
+                        await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersError", _libraryName, null, "Subfolder",
+                            $"Subfolder '{parentName}' not found at any attempted path. Tried: {string.Join(", ", pathsToTry)}, Session ID: {debugSessionId}");
                     }
-
-                    // Update UI with the loaded subfolders
-                    UpdateUI(() =>
-                    {
-                        isUpdatingTreeView = true;
-
-                        // Clear existing child nodes that might be placeholders
-                        parentNode.Nodes.Clear();
-
-                        // Create a dictionary for potential nested children (for future expansion)
-                        var foldersByParent = _nestedSubfolderCache
-                            .Where(f => f.Level > parentLevel + 1)
-                            .GroupBy(f => GetParentPath(f.FullPath))
-                            .ToDictionary(
-                                g => g.Key,
-                                g => g.Select(f => (f.FullPath, f.FolderName, f.Level, f.HasUniquePermissions, f.Groups, f.HasChildren)).ToList()
-                            );
-
-                        // Add new child nodes
-                        foreach (var folder in processedSubfolders.OrderBy(f => f.FolderName))
-                        {
-                            var node = CreateFolderTreeNode(folder, foldersByParent);
-                            if (node != null)
-                            {
-                                node.BackColor = Color.LightYellow;
-                                node.Text += " [Loaded]";
-                                parentNode.Nodes.Add(node);
-                            }
-                        }
-
-                        parentNode.Expand();
-                        lblStatus.Text = $"Loaded {processedSubfolders.Count} level {parentLevel + 1} subfolders for '{parentName}'.";
-                        isUpdatingTreeView = false;
-                        btnViewSubfolders.Enabled = true;
-                        this.Cursor = Cursors.Default;
-                    });
-
-                    await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersSuccess", _libraryName, null, "Subfolder",
-                        $"Successfully loaded {processedSubfolders.Count} subfolders for '{parentName}' at level {parentLevel + 1}, Session ID: {debugSessionId}");
                 }
             }
             catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Top-level error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: StackTrace: {ex.StackTrace}");
+
                 UpdateUI(() =>
                 {
                     MessageBox.Show($"Error loading subfolders: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -4678,12 +4958,11 @@ namespace EntraGroupsApp
                     btnViewSubfolders.Enabled = true;
                     this.Cursor = Cursors.Default;
                 });
+
                 await _auditLogManager?.LogAction(_signedInUserId, null, "LoadSubfoldersError", _libraryName, null, "Subfolder",
-                    $"Error loading subfolders for '{parentName}': {ex.Message}, StackTrace: {ex.StackTrace}, Session ID: {debugSessionId}");
-                System.Diagnostics.Debug.WriteLine($"btnViewSubfolders_Click: Error: {ex.Message}, StackTrace: {ex.StackTrace}");
+                    $"Top-level error loading subfolders for '{parentName}': {ex.Message}, StackTrace: {ex.StackTrace}, Session ID: {debugSessionId}");
             }
         }
-
         private string CleanDuplicateSitePath(string path, string siteUrl)
         {
             if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(siteUrl))
@@ -4694,21 +4973,68 @@ namespace EntraGroupsApp
                 var siteUri = new Uri(siteUrl);
                 var sitePath = siteUri.AbsolutePath.TrimEnd('/');
 
-                // If the path contains the site path twice, remove the duplicate
-                var duplicatedSitePath = sitePath + sitePath;
-                if (path.Contains(duplicatedSitePath))
+                // Extract site segments for more precise duplicate detection
+                var siteSegments = sitePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (siteSegments.Length < 2) return path; // Need at least "teams" and "sitename"
+
+                var pathSegments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                var cleanedSegments = new List<string>();
+
+                // Look for duplicate site path patterns
+                for (int i = 0; i < pathSegments.Length; i++)
                 {
-                    var cleaned = path.Replace(duplicatedSitePath, sitePath);
-                    System.Diagnostics.Debug.WriteLine($"CleanDuplicateSitePath: Removed duplicate site path: '{path}' -> '{cleaned}'");
-                    return cleaned;
+                    // Check if we're at the start of a potential duplicate site path
+                    if (i + siteSegments.Length <= pathSegments.Length)
+                    {
+                        bool isDuplicate = true;
+                        for (int j = 0; j < siteSegments.Length; j++)
+                        {
+                            if (!string.Equals(pathSegments[i + j], siteSegments[j], StringComparison.OrdinalIgnoreCase))
+                            {
+                                isDuplicate = false;
+                                break;
+                            }
+                        }
+
+                        // If we found a duplicate and we already have the site path, skip it
+                        if (isDuplicate && cleanedSegments.Count >= siteSegments.Length)
+                        {
+                            bool alreadyHasSitePath = true;
+                            for (int k = 0; k < siteSegments.Length; k++)
+                            {
+                                if (!string.Equals(cleanedSegments[k], siteSegments[k], StringComparison.OrdinalIgnoreCase))
+                                {
+                                    alreadyHasSitePath = false;
+                                    break;
+                                }
+                            }
+
+                            if (alreadyHasSitePath)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"CleanDuplicateSitePath: Skipping duplicate site path at position {i}");
+                                i += siteSegments.Length - 1; // Skip the duplicate segments
+                                continue;
+                            }
+                        }
+                    }
+
+                    cleanedSegments.Add(pathSegments[i]);
                 }
+
+                var cleaned = "/" + string.Join("/", cleanedSegments);
+
+                if (cleaned != path)
+                {
+                    System.Diagnostics.Debug.WriteLine($"CleanDuplicateSitePath: Cleaned path: '{path}' -> '{cleaned}'");
+                }
+
+                return cleaned;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"CleanDuplicateSitePath: Error cleaning path: {ex.Message}");
+                return path;
             }
-
-            return path;
         }
         private async Task<Microsoft.SharePoint.Client.Web> GetWebContextAsync()
         {
