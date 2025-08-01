@@ -1,4 +1,4 @@
-﻿using Microsoft.Graph;
+using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
@@ -51,6 +51,7 @@ namespace EntraGroupsApp
             GroupSearchForm? groupSearchForm, AuditLogManager auditLogManager, string signedInUserId)
         {
             InitializeComponent();
+             this.StartPosition = FormStartPosition.CenterScreen;
             _graphClient = graphClient ?? throw new ArgumentNullException(nameof(graphClient));
             _selectedGroups = selectedGroups ?? new List<Group>();
             _mainForm = mainForm ?? throw new ArgumentNullException(nameof(mainForm));
@@ -71,11 +72,11 @@ namespace EntraGroupsApp
             btnReturn.AutoSize = true;
             btnReturnToPreviousWindow.AutoSize = true;
 
-            listBoxGroups.DataSource = _selectedGroups;
-            listBoxGroups.DisplayMember = "DisplayName";
+            groupsListBox.DataSource = _selectedGroups;
+            groupsListBox.DisplayMember = "DisplayName";
 
             // Event handlers
-            listBoxGroups.SelectedIndexChanged += async (s, e) => await listBoxGroups_SelectedIndexChanged(s, e);
+            groupsListBox.SelectedIndexChanged += async (s, e) => await groupsListBox_SelectedIndexChanged(s, e);
             btnBrowseAddUser.Click += btnBrowseAddUser_Click;
             btnRemoveUser.Click += btnRemoveUser_Click;
             btnUndo.Click += btnUndo_Click;
@@ -96,7 +97,7 @@ namespace EntraGroupsApp
 
             if (_selectedGroups.Any())
             {
-                listBoxGroups.SelectedIndex = 0;
+                groupsListBox.SelectedIndex = 0;
             }
             else
             {
@@ -111,12 +112,12 @@ namespace EntraGroupsApp
 
         private async void btnBrowseAddUser_Click(object sender, EventArgs e)
         {
-            if (listBoxGroups.SelectedItem == null)
+            if (groupsListBox.SelectedItem == null)
             {
                 MessageBox.Show("Please select a group.");
                 return;
             }
-            var selectedGroup = (Group)listBoxGroups.SelectedItem;
+            var selectedGroup = (Group)groupsListBox.SelectedItem;
 
             bool usersConfirmed = false;
             List<User> validUsers = null;
@@ -131,6 +132,7 @@ namespace EntraGroupsApp
                     }
 
                     var usersToAdd = browseForm.SelectedUsers;
+                    System.Diagnostics.Debug.WriteLine($"BrowseUsersForm returned {usersToAdd.Count} selected users");
 
                     try
                     {
@@ -154,6 +156,7 @@ namespace EntraGroupsApp
 
                         var duplicates = usersToAdd.Where(u => memberIds.Contains(u.Id)).ToList();
                         validUsers = usersToAdd.Where(u => !memberIds.Contains(u.Id)).ToList();
+                        System.Diagnostics.Debug.WriteLine($"After filtering: {validUsers.Count} valid users, {duplicates.Count} duplicates");
 
                         if (duplicates.Any())
                         {
@@ -171,10 +174,12 @@ namespace EntraGroupsApp
 
                         using (var confirmDialog = new ConfirmUsersDialog(validUsers.Select(u => (u.UserPrincipalName ?? u.DisplayName ?? u.Id, u)).ToList()))
                         {
+                            System.Diagnostics.Debug.WriteLine($"Passing {validUsers.Count} users to ConfirmUsersDialog");
                             var result = confirmDialog.ShowDialog();
                             if (result == DialogResult.OK)
                             {
                                 validUsers = confirmDialog.SelectedUsers;
+                                System.Diagnostics.Debug.WriteLine($"ConfirmUsersDialog returned {validUsers.Count} confirmed users");
                                 if (!validUsers.Any())
                                 {
                                     MessageBox.Show("No users selected to add.");
@@ -236,19 +241,18 @@ namespace EntraGroupsApp
 
             if (addedCount > 0)
             {
-                await listBoxGroups_SelectedIndexChanged(null, EventArgs.Empty);
+                await groupsListBox_SelectedIndexChanged(null, EventArgs.Empty);
                 MessageBox.Show($"{addedCount} user(s) added successfully via browse.");
             }
         }
-
         private async void btnRemoveUser_Click(object sender, EventArgs e)
         {
-            if (listBoxGroups.SelectedItem == null)
+            if (groupsListBox.SelectedItem == null)
             {
                 MessageBox.Show("Please select a group.");
                 return;
             }
-            var selectedGroup = (Group)listBoxGroups.SelectedItem;
+            var selectedGroup = (Group)groupsListBox.SelectedItem;
 
             var selectedRows = dataGridViewMembers.SelectedRows;
             if (selectedRows.Count == 0)
@@ -282,7 +286,7 @@ namespace EntraGroupsApp
                             user.Id ?? "",
                             $"Removed user from group {selectedGroup.DisplayName}").ConfigureAwait(false);
                     }
-                    await listBoxGroups_SelectedIndexChanged(null, EventArgs.Empty);
+                    await groupsListBox_SelectedIndexChanged(null, EventArgs.Empty);
                 }
                 catch (Exception ex)
                 {
@@ -293,12 +297,12 @@ namespace EntraGroupsApp
 
         private async void btnAddNestedGroup_Click(object sender, EventArgs e)
         {
-            if (listBoxGroups.SelectedItem == null)
+            if (groupsListBox.SelectedItem == null)
             {
                 MessageBox.Show("Please select a group.");
                 return;
             }
-            var selectedGroup = (Group)listBoxGroups.SelectedItem;
+            var selectedGroup = (Group)groupsListBox.SelectedItem;
 
             try
             {
@@ -420,7 +424,7 @@ namespace EntraGroupsApp
                         }
                     }
 
-                    await listBoxGroups_SelectedIndexChanged(null, EventArgs.Empty);
+                    await groupsListBox_SelectedIndexChanged(null, EventArgs.Empty);
 
                     if (addedCount > 0)
                     {
@@ -446,12 +450,12 @@ namespace EntraGroupsApp
 
         private async void btnRemoveNestedGroup_Click(object sender, EventArgs e)
         {
-            if (listBoxGroups.SelectedItem == null)
+            if (groupsListBox.SelectedItem == null)
             {
                 MessageBox.Show("Please select a group.");
                 return;
             }
-            var selectedGroup = (Group)listBoxGroups.SelectedItem;
+            var selectedGroup = (Group)groupsListBox.SelectedItem;
 
             var selectedRows = dataGridViewMembers.SelectedRows;
             if (selectedRows.Count == 0)
@@ -500,7 +504,7 @@ namespace EntraGroupsApp
                             group.Id ?? "",
                             $"Removed nested group from {selectedGroup.DisplayName}").ConfigureAwait(false);
                     }
-                    await listBoxGroups_SelectedIndexChanged(null, EventArgs.Empty);
+                    await groupsListBox_SelectedIndexChanged(null, EventArgs.Empty);
                 }
                 catch (Exception ex)
                 {
@@ -511,12 +515,12 @@ namespace EntraGroupsApp
 
         private async void btnCopyUsers_Click(object sender, EventArgs e)
         {
-            if (listBoxGroups.SelectedItem == null)
+            if (groupsListBox.SelectedItem == null)
             {
                 MessageBox.Show("Please select a group.");
                 return;
             }
-            var selectedGroup = (Group)listBoxGroups.SelectedItem;
+            var selectedGroup = (Group)groupsListBox.SelectedItem;
 
             var selectedRows = dataGridViewMembers.SelectedRows;
             if (selectedRows.Count == 0)
@@ -654,13 +658,13 @@ namespace EntraGroupsApp
 
         private async void btnExportToCsv_Click(object sender, EventArgs e)
         {
-            if (listBoxGroups.SelectedItem == null)
+            if (groupsListBox.SelectedItem == null)
             {
                 MessageBox.Show("Please select a group.");
                 return;
             }
 
-            var selectedGroup = (Group)listBoxGroups.SelectedItem;
+            var selectedGroup = (Group)groupsListBox.SelectedItem;
             try
             {
                 var allMembers = new List<DirectoryObject>();
@@ -741,12 +745,12 @@ namespace EntraGroupsApp
 
         private async void btnReplaceUser_Click(object sender, EventArgs e)
         {
-            if (listBoxGroups.SelectedItem == null)
+            if (groupsListBox.SelectedItem == null)
             {
                 MessageBox.Show("Please select a group.");
                 return;
             }
-            var selectedGroup = (Group)listBoxGroups.SelectedItem;
+            var selectedGroup = (Group)groupsListBox.SelectedItem;
 
             var selectedRows = dataGridViewMembers.SelectedRows;
             if (selectedRows.Count == 0)
@@ -962,7 +966,7 @@ namespace EntraGroupsApp
                                 "",  // No specific targetId for aggregate replace
                                 $"Replaced {removedCount} member(s) with {addedCount} nested group(s) in {selectedGroup.DisplayName}").ConfigureAwait(false);
 
-                            await listBoxGroups_SelectedIndexChanged(null, EventArgs.Empty);
+                            await groupsListBox_SelectedIndexChanged(null, EventArgs.Empty);
                             var message = $"Replaced {removedCount} member(s) with {addedCount} nested group(s) in '{selectedGroup.DisplayName}'.";
                             if (failedGroups.Any())
                             {
@@ -1157,7 +1161,7 @@ namespace EntraGroupsApp
                             "",  // No specific targetId for aggregate replace
                             $"Replaced {removedCount} member(s) with {addedCount} user(s) in {selectedGroup.DisplayName}").ConfigureAwait(false);
 
-                        await listBoxGroups_SelectedIndexChanged(null, EventArgs.Empty);
+                        await groupsListBox_SelectedIndexChanged(null, EventArgs.Empty);
                         MessageBox.Show($"Replaced {removedCount} member(s) with {addedCount} user(s) in '{selectedGroup.DisplayName}'.");
                     }
                 }
@@ -1247,9 +1251,9 @@ namespace EntraGroupsApp
                         $"Undid copying user to {lastAction.TargetGroup.DisplayName}").ConfigureAwait(false);
                 }
 
-                if (listBoxGroups.SelectedItem == lastAction.ParentGroup)
+                if (groupsListBox.SelectedItem == lastAction.ParentGroup)
                 {
-                    await listBoxGroups_SelectedIndexChanged(null, EventArgs.Empty);
+                    await groupsListBox_SelectedIndexChanged(null, EventArgs.Empty);
                 }
             }
             catch (Exception ex)
@@ -1258,16 +1262,16 @@ namespace EntraGroupsApp
             }
         }
 
-        private async Task listBoxGroups_SelectedIndexChanged(object sender, EventArgs e)
+        private async Task groupsListBox_SelectedIndexChanged(object sender, EventArgs e)
         {
-            if (listBoxGroups.SelectedItem == null)
+            if (groupsListBox.SelectedItem == null)
             {
                 dataGridViewMembers.DataSource = null;
                 MessageBox.Show("No group selected.");
                 return;
             }
 
-            var selectedGroup = (Group)listBoxGroups.SelectedItem;
+            var selectedGroup = (Group)groupsListBox.SelectedItem;
             try
             {
                 var allMembers = new List<DirectoryObject>();
@@ -1328,7 +1332,7 @@ namespace EntraGroupsApp
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error in listBoxGroups_SelectedIndexChanged for group '{selectedGroup.DisplayName}': {ex}");
+                Debug.WriteLine($"Error in groupsListBox_SelectedIndexChanged for group '{selectedGroup.DisplayName}': {ex}");
                 dataGridViewMembers.DataSource = null;
                 MessageBox.Show($"Error loading members: {ex.Message}");
             }
@@ -1401,7 +1405,7 @@ namespace EntraGroupsApp
             }
 
             string groupId = member.Id;
-            var parentGroup = (Group?)listBoxGroups.SelectedItem;
+            var parentGroup = (Group?)groupsListBox.SelectedItem;
             if (parentGroup == null)
             {
                 MessageBox.Show("No parent group selected.");
@@ -1434,7 +1438,7 @@ namespace EntraGroupsApp
                 var nestedGroupForm = new NestedGroupForm(nestedMembers, groupId, parentGroup, _graphClient, _auditLogManager, _signedInUserId);
                 nestedGroupForm.Owner = this;
                 nestedGroupForm.ShowDialog();
-                await listBoxGroups_SelectedIndexChanged(null, EventArgs.Empty);
+                await groupsListBox_SelectedIndexChanged(null, EventArgs.Empty);
             }
             catch (Exception ex)
             {
@@ -1460,8 +1464,5 @@ namespace EntraGroupsApp
             }
         }
 
-        private void btnExportToCsv_Click_1(object sender, EventArgs e)
-        {
-        }
     }
 }
