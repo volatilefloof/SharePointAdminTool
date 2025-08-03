@@ -18,6 +18,7 @@ The program automates tasks such as:
 _5: Leverage the ability to directly manipulate root and subfolder level permissions using backend CSOM operations_
 
 _5a: Ability to gather storage metric analytics across multiple site collections at scale_
+
 _Using the site.usage.storage property in CSOM, obtain the aggregate total storage of a site collection, as well as the storage percentage used_
 
 _Although you cannot retrieve total quota information from a site collection programatically without being a tenant admin, you can take advantage of the two exposed values of the above property and use basic arithmetic to compute the missing estimate as follows_
